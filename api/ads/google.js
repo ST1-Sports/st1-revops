@@ -1,4 +1,5 @@
 import { setCors } from '../_lib/cors.js';
+import { requireInternalSecret } from '../_lib/internalAuth.js';
 
 export const config = { api: { bodyParser: { sizeLimit: '1mb' } } };
 
@@ -166,6 +167,7 @@ async function resumeCampaign(id) {
 }
 
 async function setBudget(campaignId, dailyBudgetUsd) {
+  if (!/^\d+$/.test(String(campaignId))) throw new Error('campaignId must be numeric');
   // Google Ads requires updating the budget object, not the campaign directly
   // Simplified: update via campaign budget mutate
   const c     = creds();
@@ -255,6 +257,7 @@ export default async function handler(req, res) {
       return res.status(400).json({ error: `Unknown action: ${action}` });
     }
     if (req.method === 'POST') {
+      if (!requireInternalSecret(req, res)) return;
       const { action, id, dailyBudget, campaign } = req.body || {};
       if (action === 'pause')      return res.status(200).json(await pauseCampaign(id));
       if (action === 'resume')     return res.status(200).json(await resumeCampaign(id));

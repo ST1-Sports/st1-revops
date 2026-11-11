@@ -167,9 +167,16 @@ export default async function handler(req, res) {
       const messages = listData.messages || [];
       if (!messages.length) return res.json({ messages: [] });
 
-      // Fetch metadata for each (subject, from, date, snippet) in parallel (batch 20)
+      // Fetch metadata for each (subject, from, date, snippet) in parallel.
+      // Honors the caller's own maxResults instead of a fixed 30 — callers
+      // like BulkOutreach.jsx's Gmail-reconciliation ask for 100-200 because
+      // they expect that many results back; silently truncating to 30 here
+      // meant matches past the cutoff were dropped with no error or signal,
+      // undermining the one tool meant to recover already-sent/bounced
+      // contacts this page lost track of.
+      const detailCap = Math.min(Math.max(Number(maxResults) || 30, 1), 200);
       const details = await Promise.all(
-        messages.slice(0, 30).map(async m => {
+        messages.slice(0, detailCap).map(async m => {
           try {
             const msgRes = await fetch(
               `https://gmail.googleapis.com/gmail/v1/users/me/messages/${m.id}?format=metadata&metadataHeaders=Subject&metadataHeaders=From&metadataHeaders=To&metadataHeaders=Date`,

@@ -127,23 +127,6 @@ function getSuggestedPrice(cost, targetMargin=MARGIN_TARGET) {
   return cost / (1 - targetMargin/100);
 }
 
-// Find all open deals affected by a product price change
-function getAffectedDeals(productId, newCost, deals, allProducts) {
-  return deals.map(deal => {
-    const affectedItems = deal.items.filter(i => i.productId === productId);
-    if (!affectedItems.length) return null;
-    return affectedItems.map(item => {
-      const newMargin = marginPct(newCost, item.quotedPrice);
-      const oldProduct = allProducts[productId];
-      const oldMargin  = oldProduct ? marginPct(oldProduct.cost, item.quotedPrice) : 0;
-      const marginDrop = oldMargin - newMargin;
-      return { deal, item, newMargin, oldMargin, marginDrop,
-        compressed: newMargin < MARGIN_WARN,
-        suggestedPrice: getSuggestedPrice(newCost) };
-    });
-  }).flat().filter(Boolean);
-}
-
 async function callClaude(prompt, sys="") {
   const r = await fetch("/api/claude",{
     method:"POST",headers:{"Content-Type":"application/json"},
@@ -948,7 +931,7 @@ Provide strategic pricing advice. Return JSON:
                 <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.red,letterSpacing:2,marginBottom:12}}>
                   ⚠ CRITICAL MARGIN ALERTS — {criticalAlerts.length} ITEMS
                 </div>
-                {criticalAlerts.length===0&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.muted,padding:"12px 0"}}>No critical alerts ✓</div>}
+                {criticalAlerts.length===0&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.muted,padding:"12px 0"}}>{deals.length===0?"No open-deal data connected yet — nothing to check against.":"No critical alerts ✓"}</div>}
                 {criticalAlerts.slice(0,5).map(a=>(
                   <div key={a.id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"8px 10px",background:B.redBg,borderRadius:5,marginBottom:6,borderLeft:`3px solid ${B.red}`}}>
                     <div>
@@ -1024,8 +1007,8 @@ Provide strategic pricing advice. Return JSON:
             <div style={{fontFamily:"'Russo One',sans-serif",fontSize:18,color:B.black,letterSpacing:.3,marginBottom:16}}>MARGIN ALERTS — OPEN DEALS</div>
             {alerts.length===0&&(
               <div style={{textAlign:"center",padding:"60px 0"}}>
-                <div style={{fontFamily:"'Russo One',sans-serif",fontSize:22,color:B.border,marginBottom:8}}>ALL CLEAR</div>
-                <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.muted}}>All open deal margins are healthy. Upload a new price list to check for compression.</div>
+                <div style={{fontFamily:"'Russo One',sans-serif",fontSize:22,color:B.border,marginBottom:8}}>{deals.length===0?"NOT CONNECTED":"ALL CLEAR"}</div>
+                <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.muted}}>{deals.length===0?"This page has no open-deal data to check margins against yet — it isn't wired to a live deals source, so this isn't a real \"all clear.\"":"All open deal margins are healthy. Upload a new price list to check for compression."}</div>
               </div>
             )}
             {Object.entries(alertsByDeal).map(([dealId,dealAlerts])=>{
@@ -1673,7 +1656,6 @@ Provide strategic pricing advice. Return JSON:
                   ["AI extracts every product","Claude reads the file and pulls out SKUs, names, dealer costs, MAP, and categories"],
                   ["Review before committing","See all extracted products in a table and confirm before they're added"],
                   ["Update or create","Matching products update costs automatically. New products are added to the catalog"],
-                  ["Margin alerts fire automatically","Any open deal with compressed margins will appear in Margin Alerts instantly"],
                 ].map(([t,d])=>(
                   <div key={t} style={{display:"flex",gap:10,padding:"8px 0",borderBottom:`1px solid ${B.border}`}}>
                     <div style={{width:5,height:5,borderRadius:"50%",background:B.orange,marginTop:5,flexShrink:0}}/>

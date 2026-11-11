@@ -1,4 +1,5 @@
 import { setCors } from '../_lib/cors.js';
+import { requireInternalSecret } from '../_lib/internalAuth.js';
 
 // YouTube Ads uses the Google Ads API filtered to VIDEO channel type.
 // Same OAuth credentials as google.js — reuses GOOGLE_ADS_* env vars.
@@ -146,6 +147,31 @@ async function resumeCampaign(id) {
   return { success: true };
 }
 
+async function setBudget(campaignId, dailyBudgetUsd) {
+  if (!/^\d+$/.test(String(campaignId))) throw new Error('campaignId must be numeric');
+  // Same pattern as api/ads/google.js's setBudget — YouTube campaigns run on
+  // the same Google Ads API and budget object, just filtered to VIDEO type.
+  const c     = creds();
+  const token = await getAccessToken();
+  const rows  = await gaqlSearch(`SELECT campaign.id, campaign_budget.resource_name FROM campaign WHERE campaign.id = ${campaignId}`);
+  const budgetRN = rows[0]?.campaign_budget?.resource_name;
+  if (!budgetRN) throw new Error('Could not find budget for campaign');
+
+  const res = await fetch(`${ADS_BASE}/customers/${c.customerId}/campaignBudgets:mutate`, {
+    method: 'POST',
+    headers: { 'Authorization': `Bearer ${token}`, 'developer-token': c.devToken, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      operations: [{
+        update: { resourceName: budgetRN, amountMicros: Math.round(dailyBudgetUsd * 1_000_000) },
+        updateMask: 'amount_micros',
+      }],
+    }),
+  });
+  const d = await res.json();
+  if (d.error) throw new Error(`YouTube SetBudget: ${JSON.stringify(d.error)}`);
+  return { success: true };
+}
+
 async function createCampaign(campaign) {
   const c     = creds();
   const token = await getAccessToken();
@@ -185,9 +211,11 @@ export default async function handler(req, res) {
       return res.status(400).json({ error: `Unknown action: ${action}` });
     }
     if (req.method === 'POST') {
+      if (!requireInternalSecret(req, res)) return;
       const { action, id, dailyBudget, campaign } = req.body || {};
       if (action === 'pause')      return res.status(200).json(await pauseCampaign(id));
       if (action === 'resume')     return res.status(200).json(await resumeCampaign(id));
+      if (action === 'set_budget') return res.status(200).json(await setBudget(id, dailyBudget));
       if (action === 'create')     return res.status(201).json(await createCampaign(campaign));
       return res.status(400).json({ error: `Unknown action: ${action}` });
     }

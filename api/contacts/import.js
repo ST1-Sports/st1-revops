@@ -19,7 +19,7 @@
 import { setCors } from '../_lib/cors.js'
 import { prisma }  from '../_lib/prisma.js'
 import { normalizeStateForStorage } from '../_lib/stateUtils.js'
-import { upsertAccountForContact } from '../_lib/accountUtils.js'
+import { upsertAccountForContact, accountDedupKey } from '../_lib/accountUtils.js'
 
 export const config = { api: { bodyParser: { sizeLimit: '2mb' } } }
 
@@ -90,10 +90,23 @@ export default async function handler(req, res) {
     return res.json({ added: 0, updated: 0, total: 0 })
   }
 
-  // Resolve/create the Account for each row's companyName up front — cheap
-  // even when many rows share one company, since the upsert is idempotent.
-  await Promise.all(data.map(async d => {
-    d.accountId = await upsertAccountForContact(d.companyName, { city: d.city, state: d.state })
+  // Resolve/create the Account for each row's companyName up front — one
+  // upsert per UNIQUE company, not per row: a CSV of one school's staff has
+  // many rows sharing the same accountDedupKey, and firing a concurrent
+  // upsert per row raced multiple inserts against the same not-yet-existing
+  // unique normalizedName, throwing a constraint violation that failed the
+  // entire batch.
+  const byDedupKey = new Map()
+  for (const d of data) {
+    const key = accountDedupKey(d.companyName, d.state)
+    if (!key) continue
+    if (!byDedupKey.has(key)) byDedupKey.set(key, [])
+    byDedupKey.get(key).push(d)
+  }
+  await Promise.all([...byDedupKey.entries()].map(async ([, rows]) => {
+    const first = rows[0]
+    const accountId = await upsertAccountForContact(first.companyName, { city: first.city, state: first.state })
+    for (const d of rows) d.accountId = accountId
   }))
 
   try {

@@ -19,6 +19,32 @@ export function orgNamesMatch(a, b) {
   return na.length > 4 && nb.length > 4 && (na.includes(nb) || nb.includes(na));
 }
 
+// Generic org-type words that don't distinguish one school from another —
+// stripping them lets "Glenwood HS" and "Glenwood High School" resolve to the
+// same core name. Deliberately NOT used by orgNamesMatch itself (used widely
+// for search/deal-linking, where this looser a match risks pulling in an
+// unrelated school); only mergeAccountGroups below opts into it, since that's
+// the one place a same-school spelling variant needs to fold into one group
+// rather than showing as two separate Accounts.
+const SCHOOL_TYPE_WORDS = /\b(high school|middle school|elementary school|junior high|jr high|elementary|schools?|district|academy|area|public|community|hs|ms|jhs|isd|usd|csd)\b/gi;
+
+export function schoolCoreName(raw) {
+  return normalizeOrgName(raw).replace(SCHOOL_TYPE_WORDS, '').replace(/\s+/g, ' ').trim();
+}
+
+/**
+ * orgNamesMatch, plus a same-core-name fallback ("Glenwood HS" / "Glenwood
+ * High School"). `coreA` lets a caller checking one name against many others
+ * (e.g. one contact's company against every zero-contact account) precompute
+ * it once instead of recomputing it on every pair.
+ */
+export function looseSchoolNameMatch(a, b, coreA) {
+  if (orgNamesMatch(a, b)) return true;
+  const ca = coreA ?? schoolCoreName(a);
+  const cb = schoolCoreName(b);
+  return ca.length > 2 && ca === cb;
+}
+
 export function schoolKeyOf(c) {
   const sch = (typeof c?.school === 'string' ? c.school : c?.school?.name || '') || '(No School)';
   const st = (c?.state || '').trim();
@@ -61,25 +87,46 @@ export function mergeZohoContactRow(local, incoming, now = Date.now()) {
   return merged;
 }
 
-/** Server list wins for membership (Zoho deletes); recent local profile edits stay. */
+/**
+ * Union of local ∪ server — a contact only one side currently knows about
+ * (this device hasn't pulled recently, or the server has one from another
+ * device) stays present; a caller drops a contact only via an explicit
+ * tombstone (src/lib/contactTombstone.js), never just because one side's
+ * snapshot happens to be missing it. Where both sides have the same contact,
+ * a recent local profile edit still wins per-field (mergeZohoContactRow).
+ */
 export function mergeContactsPreferRecentSaves(localList, serverList, now = Date.now()) {
-  if (!Array.isArray(serverList)) return localList || [];
-  const localById = new Map((localList || []).map(c => [c.id, c]));
-  return serverList.map(sc => {
-    const lc = localById.get(sc.id);
-    return lc ? mergeZohoContactRow(lc, sc, now) : sc;
-  });
+  const byId = new Map();
+  for (const c of (Array.isArray(localList) ? localList : [])) {
+    if (c?.id) byId.set(c.id, c);
+  }
+  for (const sc of (Array.isArray(serverList) ? serverList : [])) {
+    if (!sc?.id) continue;
+    const lc = byId.get(sc.id);
+    byId.set(sc.id, lc ? mergeZohoContactRow(lc, sc, now) : sc);
+  }
+  return [...byId.values()];
 }
 
-/** Analytics / lists → CRM person deal tab, or the school page when there is no contact. */
+/**
+ * Analytics / lists → CRM account page (deals belong to the organization),
+ * or the person's own deal tab only as a fallback for a deal that predates
+ * accountId tagging and has no account to resolve. A deal with accountId
+ * set skips contact resolution entirely — it's tied to the organization,
+ * not to whichever contact happens to share its name or id.
+ */
 export function crmNavForDeal(deal, contacts) {
   if (!deal) return null;
+  const schoolName = typeof deal.school === 'string' ? deal.school : (deal.school?.name || '');
+  if (deal.accountId) {
+    const usableSchool = deal.state && schoolName ? `${schoolName} — ${deal.state}` : schoolName;
+    return usableSchool && usableSchool !== '(No School)' ? { school: usableSchool, tab: 'deal' } : null;
+  }
   const list = contacts || [];
   const named = String(deal.contact || '').trim().toLowerCase();
   const contact = (deal.contactId && list.find(c => c.id === deal.contactId))
     || (named && list.find(c => contactDisplayName(c).toLowerCase() === named))
     || null;
-  const schoolName = typeof deal.school === 'string' ? deal.school : (deal.school?.name || '');
   const schoolKey = contact
     ? schoolKeyOf(contact)
     : (deal.state && schoolName ? `${schoolName} — ${deal.state}` : schoolName);
@@ -113,6 +160,15 @@ export function contactBelongsToSchoolKey(c, selSchool) {
   return orgNamesMatch(c.school, selName) || orgNamesMatch(c.company, selName);
 }
 
+/** Same matching rule as contactBelongsToSchoolKey, for a manually-created account shell. */
+export function accountBelongsToSchoolKey(a, selSchool) {
+  if (!a?.name) return false;
+  if (schoolKeyOf({ school: a.name, state: a.state }) === selSchool) return true;
+  const selName = cleanSchoolName(selSchool);
+  if (!statesCompatible(schoolKeyState(selSchool), a.state)) return false;
+  return looseSchoolNameMatch(a.name, selName);
+}
+
 function contactDisplayName(c) {
   return (c?.fullName || `${c?.firstName || ''} ${c?.lastName || ''}`.trim() || '').trim();
 }
@@ -128,8 +184,11 @@ export function dealBelongsToContact(deal, contact) {
   return orgNamesMatch(dealSchool, contact.school) || orgNamesMatch(deal.company, contact.school);
 }
 
-export function dealBelongsToSchool(deal, schoolContacts, schoolCleanName) {
+export function dealBelongsToSchool(deal, schoolContacts, schoolCleanName, accountId) {
   if (!deal) return false;
+  // A deal tagged with the real Account id is authoritative — no fuzzy name
+  // matching needed, and it stays correct even if the account gets renamed.
+  if (accountId && deal.accountId) return deal.accountId === accountId;
   const contacts = schoolContacts || [];
   if (contacts.some(c => c.id && c.id === deal.contactId)) return true;
   if (contacts.some(c => {
@@ -275,7 +334,7 @@ export function mergeAccountGroups(groups) {
       const [k2, g2] = entries[j];
       if (absorbed.has(k2)) continue;
       if (!statesCompatible(schoolKeyState(keepKey), schoolKeyState(k2))) continue;
-      if (!orgNamesMatch(keep.name, g2.name) && !orgNamesMatch(cleanSchoolName(keepKey), cleanSchoolName(k2))) continue;
+      if (!looseSchoolNameMatch(keep.name, g2.name) && !looseSchoolNameMatch(cleanSchoolName(keepKey), cleanSchoolName(k2))) continue;
 
       const preferIncoming =
         (g2.name || '').length > (keep.name || '').length
@@ -293,11 +352,25 @@ export function mergeAccountGroups(groups) {
         deals: dedupeDeals([...(winner.deals || []), ...(loser.deals || [])]),
         invoiced: !!(winner.invoiced || loser.invoiced),
         value: 0,
+        // Carry a manually-created account shell's own fields through a merge —
+        // otherwise folding a same-school contact group onto it would silently
+        // drop the account record's id/URL/type.
+        accountId: winner.accountId || loser.accountId || null,
+        domain: winner.domain || loser.domain || null,
+        orgType: winner.orgType || loser.orgType || null,
+        city: winner.city || loser.city || null,
+        state: winner.state || loser.state || null,
       };
       keep.value = keep.deals
         .filter(d => !['Closed Won', 'Closed Lost'].includes(d.stage))
         .reduce((a, d) => a + (d.value || 0), 0);
+      // Both keys are now folded into `keep` — absorb the winner's key too,
+      // not just the loser's. Without this, a winner key that differs from
+      // the current outer key (the later entry had the longer name) would
+      // still get visited as its own fresh top-level entries[] iteration
+      // later, silently overwriting this merge with an unmerged copy.
       absorbed.add(loserKey);
+      absorbed.add(winnerKey);
       keepKey = winnerKey;
     }
 

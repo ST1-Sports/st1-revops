@@ -42,9 +42,12 @@
  *      subject/body written for that org — and schedules it via the same
  *      MT-business-hours-aware batching the Campaigns tab uses, so it shows
  *      up there for tracking like any other campaign. GO on this page can
- *      fire remaining Day 1 emails now (or one every 15 seconds) via
- *      api/agents/brad-send; later touches still use the cron. The batch
- *      record is marked approved + linked to the campaign and kept as history.
+ *      fire remaining emails for whichever step is selected (Email 1, 2, 3…)
+ *      now or one every 15 seconds, via api/agents/brad-send — the same
+ *      manual, controlled-batch pacing works for any step, not just the
+ *      first; anything not GO'd manually still goes out via the cron once
+ *      approved. The batch record is marked approved + linked to the
+ *      campaign and kept as history.
  *   7. First Active/Approved upload owns each email. Later lists mark those
  *      people heldForEarlier and drop them from Ready so they are not sent twice.
  *   8. A person can be marked Positive Intent (they engaged — no Email 2/3)
@@ -198,23 +201,35 @@ function fmtDT(iso) {
 function Lbl({ children, c, s: sty }) { return <div style={{ fontFamily: "'Lexend Zetta',sans-serif", fontSize: 8, color: c || B.muted, letterSpacing: 1, ...sty }}>{children}</div>; }
 function OBtn({ children, onClick, disabled, style: sty }) { return <button onClick={onClick} disabled={disabled} style={{ background: disabled ? B.border : B.orange, color: disabled ? B.muted : B.white, border: "none", borderRadius: 5, padding: "8px 16px", fontSize: 11, fontFamily: "'Lexend Zetta',sans-serif", fontWeight: 700, letterSpacing: .4, cursor: disabled ? "not-allowed" : "pointer", ...sty }}>{children}</button>; }
 function GBtn({ children, onClick, disabled, style: sty }) { return <button onClick={onClick} disabled={disabled} style={{ background: B.white, color: B.textMid, border: `1px solid ${B.borderD}`, borderRadius: 5, padding: "7px 13px", fontSize: 11, fontFamily: "'Lexend',sans-serif", cursor: disabled ? "default" : "pointer", opacity: disabled ? .6 : 1, ...sty }}>{children}</button>; }
-function Day1GoPanel({ readyCount, pace, setPace, run, onGo, onStop, canGo, goLimit, setGoLimit }) {
+function GoPanel({ readyCount, pace, setPace, run, onGo, onStop, canGo, goLimit, setGoLimit, stepIndices, goStep, setGoStep }) {
   const { thisGo, remaining, dripMins } = goBatchPreview(readyCount, goLimit, GO_DRIP_MS);
   const presets = [10, 25, 50, 100];
+  const stepLabel = `Email ${goStep + 1}`;
   return (
     <div style={{ background: B.orangeBg, border: `2px solid ${B.orange}`, borderRadius: 10, padding: "16px 18px", marginBottom: 18 }}>
+      {stepIndices.length > 1 && (
+        <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 12, paddingBottom: 12, borderBottom: `1px solid ${B.orange}30` }}>
+          <Lbl c={B.orange} s={{ margin: 0 }}>SEND</Lbl>
+          {stepIndices.map(i => (
+            <button key={i} type="button" disabled={!!run} onClick={() => setGoStep(i)}
+              style={{ background: goStep === i ? B.orange : B.white, color: goStep === i ? B.white : B.text, border: `1px solid ${B.orange}80`, borderRadius: 4, padding: "5px 11px", fontSize: 11, fontWeight: 700, cursor: run ? "default" : "pointer" }}>
+              Email {i + 1}
+            </button>
+          ))}
+        </div>
+      )}
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: 12 }}>
         <div>
-          <Lbl c={B.orange}>SEND DAY 1 FROM BRAD</Lbl>
+          <Lbl c={B.orange}>SEND {stepLabel.toUpperCase()} FROM BRAD</Lbl>
           <div style={{ fontSize: 13, fontWeight: 600, color: B.text, marginTop: 6 }}>
             {readyCount > 0
-              ? `${readyCount.toLocaleString()} Email 1${readyCount !== 1 ? "s" : ""} ready — this GO sends ${thisGo.toLocaleString()}`
-              : "Add Day 1 copy below, then GO"}
+              ? `${readyCount.toLocaleString()} ${stepLabel}${readyCount !== 1 ? "s" : ""} ready — this GO sends ${thisGo.toLocaleString()}`
+              : `Add ${stepLabel} copy below, then GO`}
           </div>
           <div style={{ fontSize: 11, color: B.textMid, marginTop: 3, maxWidth: 560, lineHeight: 1.5 }}>
             {readyCount > 0
               ? `Only the number you set next to GO goes out from brad@shopst1sports.com. ${remaining.toLocaleString()} stay waiting for the next GO.`
-              : "Nothing sends until you write Email 1, pick how many this GO, and press GO."}
+              : `Nothing sends until you write ${stepLabel}, pick how many this GO, and press GO.`}
           </div>
         </div>
         <div style={{ display: "flex", flexDirection: "column", gap: 8, alignItems: "flex-end" }}>
@@ -274,16 +289,44 @@ const BOUNCE_RESOLUTIONS = {
 };
 
 // Shared by the top bounce banner and each row's expanded view — a
-// suggested replacement email (if the CRM lookup found one), a plain field
-// to type a corrected one, and a way to clear the alert with no email at
-// all when there just isn't a good address to use.
-function BounceFixBox({ suggestedEmail, draftEmail, onDraftChange, onFix, onResolve }) {
+// suggested replacement email (if the CRM lookup found one), an on-demand
+// web search for a current contact when it didn't, a plain field to type a
+// corrected one, and a way to clear the alert with no email at all when
+// there just isn't a good address to use.
+function BounceFixBox({ suggestedEmail, draftEmail, onDraftChange, onFix, onResolve, webResult, webSearching, onWebSearch }) {
   return (
     <>
       {suggestedEmail && (
         <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8, fontSize: 11, color: B.textMid, background: B.greenBg, border: `1px solid ${B.green}30`, borderRadius: 4, padding: "6px 9px" }}>
           ✓ Found a different email on file: <b>{suggestedEmail}</b>
           <OBtn onClick={() => onFix(suggestedEmail)} style={{ fontSize: 9, padding: "5px 10px", marginLeft: "auto" }}>USE THIS</OBtn>
+        </div>
+      )}
+      {!suggestedEmail && onWebSearch && (
+        <div style={{ marginBottom: 8 }}>
+          {!webResult && (
+            <GBtn onClick={onWebSearch} disabled={webSearching} style={{ fontSize: 9, padding: "6px 12px" }}>
+              {webSearching ? "Searching the web…" : "🔍 Search the web for a current contact"}
+            </GBtn>
+          )}
+          {webResult && webResult.found && webResult.email && (
+            <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", fontSize: 11, color: B.textMid, background: B.greenBg, border: `1px solid ${B.green}30`, borderRadius: 4, padding: "6px 9px" }}>
+              ✓ Web search found <b>{webResult.name}</b>{webResult.title ? ` (${webResult.title})` : ""} — <b>{webResult.email}</b>
+              <OBtn onClick={() => onFix(webResult.email)} style={{ fontSize: 9, padding: "5px 10px", marginLeft: "auto" }}>USE THIS</OBtn>
+              {webResult.sourceUrl && <a href={webResult.sourceUrl} target="_blank" rel="noreferrer" style={{ fontSize: 9, color: B.muted }}>source</a>}
+            </div>
+          )}
+          {webResult && webResult.found && !webResult.email && (
+            <div style={{ fontSize: 11, color: B.textMid, background: B.yellowBg, border: `1px solid ${B.yellow}30`, borderRadius: 4, padding: "6px 9px" }}>
+              Found <b>{webResult.name}</b>{webResult.title ? ` (${webResult.title})` : ""} via web search, but no email listed —
+              {webResult.sourceUrl ? <> check <a href={webResult.sourceUrl} target="_blank" rel="noreferrer">the source</a> for contact info.</> : " no source to check either."}
+            </div>
+          )}
+          {webResult && !webResult.found && (
+            <div style={{ fontSize: 11, color: B.muted, background: B.surface, border: `1px solid ${B.border}`, borderRadius: 4, padding: "6px 9px" }}>
+              No current contact found via web search.
+            </div>
+          )}
         </div>
       )}
       <div style={{ display: "flex", gap: 6, marginBottom: 8 }}>
@@ -367,12 +410,15 @@ export default function BulkOutreach({ s, dispatch, toast, cu, setMod }) {
   const [leadPage, setLeadPage] = useState(0);
   const [suggestedEmails, setSuggestedEmails] = useState({}); // { [leadId]: alternateEmail } — from mark-bounced's CRM lookup
   const [emailFixDraft, setEmailFixDraft] = useState({}); // { [leadId]: string } — in-progress typed correction
+  const [webContactResults, setWebContactResults] = useState({}); // { [leadId]: {found,name,title,email,phone,sourceUrl} } — on-demand web search, only when suggestedEmails has nothing
+  const [webSearchingId, setWebSearchingId] = useState(null); // leadId currently being searched
   const [committing, setCommitting] = useState(false);
   const [saveStatus, setSaveStatus] = useState(null); // null | "saving" | "saved"
   const [sendingKey, setSendingKey] = useState(null); // `${leadId}-${touchIdx}` currently sending
   const [syncingGmail, setSyncingGmail] = useState(false);
   const [goPace, setGoPace] = useState(urlPace === "drip" ? "drip" : "now"); // now | drip
   const [goLimit, setGoLimit] = useState(25);
+  const [goStep, setGoStep] = useState(0); // which email (0-indexed) the GO panel currently targets
   const [composingEmail2, setComposingEmail2] = useState(false);
   const [composingEmail3, setComposingEmail3] = useState(false);
   const [goRun, setGoRun] = useState(null); // {mode,total,done,failed,current,nextIn} while GO is live
@@ -518,6 +564,13 @@ export default function BulkOutreach({ s, dispatch, toast, cu, setMod }) {
   const email3Ready = touchHasCopy(templates.step2) || sendableLeads.some(l => touchHasCopy(l.touches?.[2]));
   const showEmail2Composer = showEmail1Composer && email1Ready && (composingEmail2 || email2Ready);
   const showEmail3Composer = showEmail1Composer && email2Ready && (composingEmail3 || email3Ready);
+  // The dedicated Email 1/2/3 composers above already own steps 0/1/2 while
+  // they're showing (same underlying templates.step{i} + StepEditor) — the
+  // EMAIL STEPS accordion below only needs to cover whichever steps aren't
+  // already being edited up there, so a Prospecting-sourced list doesn't
+  // show the same email in two different-looking editors at once.
+  const composerOwnsStep = i => (i === 0 && showEmail1Composer) || (i === 1 && showEmail2Composer) || (i === 2 && showEmail3Composer);
+  const emailStepsIndices = useMemo(() => stepIndices.filter(i => !composerOwnsStep(i)), [stepIndices, showEmail1Composer, showEmail2Composer, showEmail3Composer]);
 
   const startMs = useMemo(() => { try { return parseMTLocalStr(startDt); } catch { return nextMTBizStart(Date.now()); } }, [startDt]);
   const [campId, setCampId] = useState(() => mkId());
@@ -789,31 +842,58 @@ Return JSON exactly as:
   // campaign's enrollments, advanced exactly the way the cron would so a
   // touch confirmed sent here is never re-sent automatically. Shared by a
   // single manual SEND NOW and by the bulk Gmail reconciliation below.
+  //
+  // Saves via touchUpdates (just the changed pairs), not the full leads
+  // array — a list here can hold thousands of leads, and the old code
+  // re-uploaded every one of them on every single send. Once enough leads
+  // carried real sent subject/body text that payload crossed the request
+  // body ceiling, the PATCH started failing — silently, since the response
+  // was never checked — so a contact that really got emailed kept looking
+  // unsent and got queued to be re-sent. touchUpdates keeps this payload
+  // tiny no matter how large the list gets.
   const markTouchesSent = async (pairs) => {
     if (!pairs.length) return;
-    const byLead = new Map();
-    for (const p of pairs) (byLead.get(p.leadId) || byLead.set(p.leadId, new Map()).get(p.leadId)).set(p.touchIdx, p.sentAt);
     const tmpl = templatesRef.current || {};
+    const byLeadId = new Map(leadsRef.current.map(l => [l.id, l]));
+    const touchUpdates = pairs.map(p => {
+      const l = byLeadId.get(p.leadId);
+      const eff = l ? effectiveTouch(l, p.touchIdx, tmpl) : null;
+      return { leadId: p.leadId, touchIdx: p.touchIdx, sentAt: p.sentAt, subject: eff?.subject, body: eff?.body };
+    });
+    const byLead = new Map();
+    for (const u of touchUpdates) (byLead.get(u.leadId) || byLead.set(u.leadId, new Map()).get(u.leadId)).set(u.touchIdx, u);
     const updatedLeads = leadsRef.current.map(l => {
       const touchMap = byLead.get(l.id);
       if (!touchMap) return l;
       const touches = [...(l.touches || [])];
-      for (const [touchIdx, sentAt] of touchMap.entries()) {
-        const eff = effectiveTouch(l, touchIdx, tmpl);
+      for (const [touchIdx, u] of touchMap.entries()) {
         while (touches.length <= touchIdx) touches.push({ subject: "", body: "" });
-        touches[touchIdx] = { ...(eff || touches[touchIdx] || {}), sentAt };
+        touches[touchIdx] = { ...(touches[touchIdx] || {}), ...(u.subject !== undefined ? { subject: u.subject } : {}), ...(u.body !== undefined ? { body: u.body } : {}), sentAt: u.sentAt };
       }
       return { ...l, touches };
     });
     leadsRef.current = updatedLeads;
     setLeads(updatedLeads);
-    leadsDirtyRef.current = true;
+    // Deliberately NOT marking leadsDirtyRef here — this already persists
+    // itself, reliably, via the small touchUpdates PATCH above. The generic
+    // autosave below keys off that same flag to decide whether it needs to
+    // re-include the full leads array; on a large list that means another,
+    // much bigger, unnecessary (and equally body-size-limited) write 900ms
+    // later, built from whatever leads this render closure had at the time —
+    // which can race the very update just made here and overwrite it right
+    // back to unsent. Nothing else here needs leadsDirtyRef set.
 
-    try {
-      await fetch("/api/outreach/batches", { method: "PATCH", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ id: batchId, leads: updatedLeads }) });
-      setBatchStatus(prev => prev === "approved" ? prev : "active");
-    } catch (e) { toast(`Sent, but couldn't save the sent status: ${e.message}`, "info"); }
+    let saved = false;
+    for (let attempt = 0; attempt < 3 && !saved; attempt++) {
+      if (attempt > 0) await new Promise(r => setTimeout(r, 1000 * attempt));
+      try {
+        const r = await fetch("/api/outreach/batches", { method: "PATCH", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ id: batchId, touchUpdates }) });
+        if (r.ok) saved = true;
+      } catch { /* retry */ }
+    }
+    if (saved) setBatchStatus(prev => prev === "approved" ? prev : "active");
+    else toast(`Sent, but couldn't confirm it saved — run "Check Brad's Inbox" later to recover it if it still shows unsent`, "error");
 
     if (linkedCampaignId) {
       const camp = (s?.campaigns || []).find(c => c.id === linkedCampaignId);
@@ -941,7 +1021,7 @@ Return JSON exactly as:
   };
 
   const sendTouchNow = async (lead, touchIdx) => {
-    if (goRun) { toast("Stop the Day 1 send first", "info"); return; }
+    if (goRun) { toast("Stop the current GO send first", "info"); return; }
     const touch = effectiveTouch(lead, touchIdx, templates);
     if (!touch || touchSentInfo(lead, touchIdx).sent) return;
     if (lead.bounced) { toast("This address bounced — fix the email before sending", "error"); return; }
@@ -958,25 +1038,29 @@ Return JSON exactly as:
     setSendingKey(null);
   };
 
-  const day1Ready = useMemo(
-    () => sendableLeads.filter(l => leadHasPendingTouch(l, 0, templates) && !touchSentInfo(l, 0).sent),
-    [sendableLeads, templates, linkedCampaignId, s?.campaigns]
+  // Which leads are ready for the email the GO panel currently targets
+  // (goStep) — not hardcoded to Email 1, so the same manual-batch/drip
+  // control works for Email 2, 3, etc.
+  const goReady = useMemo(
+    () => sendableLeads.filter(l => leadHasPendingTouch(l, goStep, templates) && !touchSentInfo(l, goStep).sent),
+    [sendableLeads, templates, goStep, linkedCampaignId, s?.campaigns]
   );
 
-  const startDay1Go = async () => {
-    if (goRun || !day1Ready.length) {
-      if (!day1Ready.length) toast("No Day 1 emails left to send", "info");
+  const startGo = async () => {
+    const stepLabel = `Email ${goStep + 1}`;
+    if (goRun || !goReady.length) {
+      if (!goReady.length) toast(`No ${stepLabel} left to send`, "info");
       return;
     }
-    const thisGo = clampGoBatchSize(goLimit, day1Ready.length);
-    const queue = day1Ready.slice(0, thisGo);
+    const thisGo = clampGoBatchSize(goLimit, goReady.length);
+    const queue = goReady.slice(0, thisGo);
     if (!queue.length) { toast("Set THIS GO to at least 1", "error"); return; }
     const drip = goPace === "drip";
     const mins = Math.ceil((queue.length * GO_DRIP_MS) / 60000);
-    const leftover = day1Ready.length - queue.length;
+    const leftover = goReady.length - queue.length;
     if (!window.confirm(drip
-      ? `Send ${queue.length} of ${day1Ready.length} Day 1 email(s) from brad@shopst1sports.com, one every 15 seconds (about ${mins} minute${mins !== 1 ? "s" : ""})?\n\n${leftover.toLocaleString()} stay waiting for the next GO. Keep this page open until it finishes.`
-      : `Send ${queue.length} of ${day1Ready.length} Day 1 email(s) from brad@shopst1sports.com now?\n\n${leftover.toLocaleString()} stay waiting for the next GO.`)) return;
+      ? `Send ${queue.length} of ${goReady.length} ${stepLabel}(s) from brad@shopst1sports.com, one every 15 seconds (about ${mins} minute${mins !== 1 ? "s" : ""})?\n\n${leftover.toLocaleString()} stay waiting for the next GO. Keep this page open until it finishes.`
+      : `Send ${queue.length} of ${goReady.length} ${stepLabel}(s) from brad@shopst1sports.com now?\n\n${leftover.toLocaleString()} stay waiting for the next GO.`)) return;
 
     goAbortRef.current = false;
     setGoRun({ mode: drip ? "drip" : "now", total: queue.length, done: 0, failed: 0, current: null, nextIn: 0 });
@@ -985,7 +1069,7 @@ Return JSON exactly as:
       if (goAbortRef.current) break;
       const lead = queue[i];
       setGoRun(r => r && { ...r, current: lead.orgName || lead.email, nextIn: 0 });
-      const result = await fireBradSend(lead, 0);
+      const result = await fireBradSend(lead, goStep);
       if (goAbortRef.current) break;
       if (result.ok) { done += 1; streak = 0; }
       else if (!result.skipped) {
@@ -1002,7 +1086,7 @@ Return JSON exactly as:
     setGoRun(null);
     const summary = `${done} sent${failed ? `, ${failed} failed` : ""}`;
     if (goAbortRef.current) toast(`Stopped — ${summary}`, "info");
-    else if (done || failed) toast(`Day 1 done — ${summary}`, failed && !done ? "error" : "success");
+    else if (done || failed) toast(`${stepLabel} done — ${summary}`, failed && !done ? "error" : "success");
   };
 
   // Flags a batch of bounced leads everywhere it matters: this batch's
@@ -1018,16 +1102,37 @@ Return JSON exactly as:
     if (!bounces.length) return;
     const bouncedAt = new Date().toISOString();
     const byLeadId = new Map(bounces.map(b => [b.leadId, b]));
-    const updatedLeads = leads.map(l => {
+    // leadsRef.current, not the leads closure — syncWithBradInbox calls this
+    // right after markTouchesSent in the same run. leads here is whatever
+    // this render captured when syncWithBradInbox started, which predates
+    // markTouchesSent's setLeads — building off it would silently wipe out
+    // the sentAt markers that call just applied (the count visibly bumping
+    // back up right after dropping was exactly this: sent-matching dropped
+    // it, then this clobbered that state with the stale pre-sent-marking
+    // leads, only the bounce flags added on top).
+    const updatedLeads = leadsRef.current.map(l => {
       const b = byLeadId.get(l.id);
       if (!b) return l;
       return { ...l, bounced: true, bouncedAt, bounceNote: (b.snippet || "").slice(0, 200) };
     });
+    leadsRef.current = updatedLeads;
     setLeads(updatedLeads);
-    try {
-      await fetch("/api/outreach/batches", { method: "PATCH", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ id: batchId, leads: updatedLeads }) });
-    } catch (e) { toast(`Bounces flagged, but couldn't save it: ${e.message}`, "info"); }
+    // Not marking leadsDirtyRef — see markTouchesSent; this already
+    // persists itself below via the small bounceUpdates PATCH.
+    // bounceUpdates, not the full leads array — see markTouchesSent for why
+    // re-uploading every lead on every save silently fails at this list's
+    // scale once it's carried enough sent copy to cross the body-size limit.
+    const bounceUpdates = bounces.map(b => ({ leadId: b.leadId, bouncedAt, bounceNote: (b.snippet || "").slice(0, 200) }));
+    let saved = false;
+    for (let attempt = 0; attempt < 3 && !saved; attempt++) {
+      if (attempt > 0) await new Promise(r => setTimeout(r, 1000 * attempt));
+      try {
+        const r = await fetch("/api/outreach/batches", { method: "PATCH", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ id: batchId, bounceUpdates }) });
+        if (r.ok) saved = true;
+      } catch { /* retry */ }
+    }
+    if (!saved) toast(`Bounces flagged, but couldn't confirm it saved — run "Check Brad's Inbox" again later`, "error");
 
     if (linkedCampaignId) {
       const camp = (s?.campaigns || []).find(c => c.id === linkedCampaignId);
@@ -1068,7 +1173,30 @@ Return JSON exactly as:
     setLeads(prev => prev.map(l => l.id === leadId ? { ...l, email: trimmed, bounced: false, bouncedAt: null, bounceNote: null } : l));
     setSuggestedEmails(prev => { const { [leadId]: _drop, ...rest } = prev; return rest; });
     setEmailFixDraft(prev => { const { [leadId]: _drop, ...rest } = prev; return rest; });
+    setWebContactResults(prev => { const { [leadId]: _drop, ...rest } = prev; return rest; });
     toast("Email updated — back in the active list", "success");
+  };
+
+  // On-demand only (never during syncWithBradInbox) — the internal CRM
+  // lookup already ran and came up empty, so this actually searches the web
+  // for whoever holds the role now. Still just a suggestion: the human
+  // clicks USE THIS same as the internal-match case, nothing auto-applies.
+  const searchWebForContact = async (lead) => {
+    setWebSearchingId(lead.id);
+    try {
+      const r = await fetch("/api/contacts/find-updated-contact", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ orgName: lead.orgName, city: lead.city, state: lead.state, sport: lead.sport, contactName: lead.contactName }),
+      });
+      const d = await r.json();
+      if (!d.ok) { toast(d.error || "Web search failed", "error"); return; }
+      setWebContactResults(prev => ({ ...prev, [lead.id]: d }));
+      if (!d.found) toast("No current contact found via web search", "info");
+    } catch (e) {
+      toast(`Web search failed: ${e.message}`, "error");
+    } finally {
+      setWebSearchingId(null);
+    }
   };
 
   // Clears a bounce alert with no replacement email in hand — the org isn't
@@ -1084,6 +1212,7 @@ Return JSON exactly as:
       : l));
     setSuggestedEmails(prev => { const { [leadId]: _drop, ...rest } = prev; return rest; });
     setEmailFixDraft(prev => { const { [leadId]: _drop, ...rest } = prev; return rest; });
+    setWebContactResults(prev => { const { [leadId]: _drop, ...rest } = prev; return rest; });
     toast(`Cleared — ${res.label}`, "success");
   };
 
@@ -1113,12 +1242,25 @@ Return JSON exactly as:
     setSyncingGmail(true);
     let sentFound = 0, bouncesFound = 0;
     try {
-      const targets = [];
+      // Built from effectiveTouch (lead's own copy, falling back to the
+      // shared step template with merge tags resolved) — not the lead's raw
+      // l.touches[i]. On a shared-template list (the common "Email 1 for all
+      // N contacts" case) a not-yet-sent lead's own touches[i] is empty
+      // until the moment it's actually sent; reading it directly here meant
+      // targets was built from nothing but blanks, so this whole sent-check
+      // silently never ran for exactly the lists it matters most for.
+      const targetsByEmail = new Map(); // email (lower) -> [{lead, touchIdx, subject}]
       for (const l of sendableLeads) {
-        l.touches.forEach((t, i) => { if (!touchSentInfo(l, i).sent && t.subject?.trim()) targets.push({ lead: l, touchIdx: i }); });
+        for (const i of stepIndices) {
+          if (touchSentInfo(l, i).sent) continue;
+          const eff = effectiveTouch(l, i, templatesRef.current);
+          if (!eff || !touchHasCopy(eff)) continue;
+          const key = l.email.toLowerCase();
+          (targetsByEmail.get(key) || targetsByEmail.set(key, []).get(key)).push({ lead: l, touchIdx: i, subject: eff.subject });
+        }
       }
-      if (targets.length) {
-        const emails = [...new Set(targets.map(t => t.lead.email))];
+      if (targetsByEmail.size) {
+        const emails = [...targetsByEmail.keys()];
         const CHUNK = 20;
         const found = [];
         for (let i = 0; i < emails.length; i += CHUNK) {
@@ -1131,8 +1273,9 @@ Return JSON exactly as:
           for (const msg of d.messages || []) {
             const toEmail = (String(msg.to || "").match(/[^<\s,]+@[^>\s,]+/) || [])[0]?.toLowerCase();
             if (!toEmail) continue;
-            const match = targets.find(t => t.lead.email.toLowerCase() === toEmail
-              && t.lead.touches[t.touchIdx].subject.trim().toLowerCase() === String(msg.subject || "").trim().toLowerCase());
+            const candidates = targetsByEmail.get(toEmail);
+            if (!candidates) continue;
+            const match = candidates.find(t => t.subject.trim().toLowerCase() === String(msg.subject || "").trim().toLowerCase());
             if (match) found.push({ leadId: match.lead.id, touchIdx: match.touchIdx, sentAt: msg.date ? new Date(msg.date).toISOString() : new Date().toISOString() });
           }
         }
@@ -1608,6 +1751,9 @@ Subject: <subject line, may include {{orgName}}>
                       onDraftChange={v => setEmailFixDraft(prev => ({ ...prev, [l.id]: v }))}
                       onFix={email => fixLeadEmail(l.id, email)}
                       onResolve={reason => resolveBounce(l.id, reason)}
+                      webResult={webContactResults[l.id]}
+                      webSearching={webSearchingId === l.id}
+                      onWebSearch={() => searchWebForContact(l)}
                     />
                   </div>
                 ))}
@@ -1830,12 +1976,12 @@ Subject: <subject line, may include {{orgName}}>
             </div>
           )}
 
-          {stepIndices.length > 0 && (
+          {emailStepsIndices.length > 0 && (
             <div style={{ background: B.white, border: `1px solid ${B.border}`, borderRadius: 10, overflow: "hidden", marginBottom: 18 }}>
               <div style={{ padding: "10px 16px", borderBottom: `1px solid ${B.border}`, fontSize: 9, fontFamily: "'Lexend Zetta',sans-serif", color: B.muted, letterSpacing: 1 }}>
                 EMAIL STEPS — shows what's already there; edit and push to everyone on that version
               </div>
-              {stepIndices.map(i => {
+              {emailStepsIndices.map(i => {
                 const stepKey = `step${i}`;
                 const tmplAtStep = touchHasCopy(templates[stepKey]) ? templates[stepKey] : null;
                 const atStep = sendableLeads.filter(l => l.touches?.[i] || (tmplAtStep && !touchHasCopy(l.touches?.[i])));
@@ -1947,16 +2093,19 @@ Subject: <subject line, may include {{orgName}}>
             </div>
           )}
 
-          <Day1GoPanel
-            readyCount={day1Ready.length}
+          <GoPanel
+            readyCount={goReady.length}
             pace={goPace}
             setPace={setGoPace}
             run={goRun}
-            onGo={startDay1Go}
+            onGo={startGo}
             onStop={() => { goAbortRef.current = true; }}
-            canGo={!!batchId && day1Ready.length > 0}
+            canGo={!!batchId && goReady.length > 0}
             goLimit={goLimit}
             setGoLimit={setGoLimit}
+            stepIndices={stepIndices.length ? stepIndices : [0]}
+            goStep={goStep}
+            setGoStep={setGoStep}
           />
 
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12, flexWrap: "wrap", gap: 10 }}>
@@ -2155,6 +2304,9 @@ Subject: <subject line, may include {{orgName}}>
                             onDraftChange={v => setEmailFixDraft(prev => ({ ...prev, [lead.id]: v }))}
                             onFix={email => fixLeadEmail(lead.id, email)}
                             onResolve={reason => resolveBounce(lead.id, reason)}
+                            webResult={webContactResults[lead.id]}
+                            webSearching={webSearchingId === lead.id}
+                            onWebSearch={() => searchWebForContact(lead)}
                           />
                         </div>
                       )}

@@ -103,54 +103,6 @@ async function redditRequest(path, method = 'GET', params = {}) {
 }
 
 /**
- * Search a subreddit for posts matching a query.
- *
- * @param {string} subreddit - Subreddit name without r/
- * @param {string} query     - Search query
- * @param {number} [limit]   - Max results (1–100, default 25)
- * @returns {Promise<import('./types').CandidateThread[]>}
- */
-async function searchSubreddit(subreddit, query, limit = 25) {
-  const { ok, status, data } = await redditRequest(`/r/${subreddit}/search`, 'GET', {
-    q: query,
-    restrict_sr: 'true',
-    sort: 'new',
-    t: 'week',
-    limit: String(Math.min(limit, 100)),
-    raw_json: '1',
-  });
-
-  if (!ok) {
-    throw new Error(`Reddit search failed (${status}) for r/${subreddit}: ${JSON.stringify(data)}`);
-  }
-
-  const posts = data?.data?.children || [];
-  return posts.map(child => normaliseListing(child.data));
-}
-
-/**
- * Fetch the full detail of a single post by its Reddit thing ID.
- *
- * @param {string} thingId - e.g. "t3_abc123" or just "abc123"
- * @returns {Promise<import('./types').CandidateThread>}
- */
-async function getThread(thingId) {
-  const id = thingId.replace(/^t3_/, '');
-  const { ok, status, data } = await redditRequest(`/comments/${id}`, 'GET', {
-    raw_json: '1',
-    limit: '1',
-  });
-
-  if (!ok) {
-    throw new Error(`Reddit getThread failed (${status}) for ${thingId}`);
-  }
-
-  const post = data?.[0]?.data?.children?.[0]?.data;
-  if (!post) throw new Error(`Reddit getThread: no post data for ${thingId}`);
-  return normaliseListing(post);
-}
-
-/**
  * Post a top-level comment on a Reddit thread.
  * The caller is responsible for ensuring REDDIT_POSTING_ENABLED is true.
  *
@@ -210,23 +162,4 @@ async function getCommentMetrics(commentId) {
 
 // ─────────────────────────────────────────────────────────────────────────────
 
-/**
- * Normalise a Reddit listing post object into a CandidateThread.
- * @param {Object} post - Raw Reddit post data
- * @returns {import('./types').CandidateThread}
- */
-function normaliseListing(post) {
-  return {
-    redditId:     post.name,              // e.g. "t3_abc123"
-    subreddit:    post.subreddit,
-    title:        post.title || '',
-    body:         post.selftext || '',
-    url:          `https://reddit.com${post.permalink}`,
-    author:       post.author || '[deleted]',
-    score:        post.score || 0,
-    commentCount: post.num_comments || 0,
-    ingestedAt:   new Date().toISOString(),
-  };
-}
-
-module.exports = { getAccessToken, redditRequest, searchSubreddit, getThread, postComment, getCommentMetrics };
+module.exports = { getAccessToken, redditRequest, postComment, getCommentMetrics };

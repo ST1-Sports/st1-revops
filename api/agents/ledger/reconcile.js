@@ -35,7 +35,8 @@ import { prisma }                              from '../../_lib/prisma.js'
 import { recall, remember }                    from '../../_lib/memory.js'
 import { postSlackMessage }                    from '../../_lib/slack.js'
 import { booksGet, booksPost,
-         isPrismaTableMissing }                from '../../_lib/zoho-books.js'
+         isPrismaTableMissing,
+         ST1_OPERATING_ACCOUNT_ID }             from '../../_lib/zoho-books.js'
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -45,7 +46,7 @@ const SHOPIFY_TOKEN   = process.env.SHOPIFY_ACCESS_TOKEN
 
 // Fixed Zoho Books account IDs (never change)
 const FIXED = {
-  operating:      '7255504000000180097',  // ST1 Operating Account
+  operating:      ST1_OPERATING_ACCOUNT_ID,
   ar:             '7255504000000000364',  // Accounts Receivable
   ap:             '7255504000000000373',  // Accounts Payable
   bankFees:       '7255504000000000409',  // Bank Fees and Charges
@@ -716,14 +717,13 @@ async function approveDeposit({ depositId, accountId, label }) {
   if (!finalAccountId) throw new Error('No account chosen — pick a category before approving')
   const finalLabel = label || deposit.suggestedLabel || 'Categorized'
 
-  // Push the categorization into Zoho Books so the transaction actually
-  // leaves "Uncategorized" there too, not just in our local mirror.
-  await booksPost(`/banktransactions/${deposit.zohoBankTxnId}/categorize`, {
-    account_id: finalAccountId,
-  })
-
-  const updated = await prisma.deposit.update({
-    where: { id: depositId },
+  // Claim the row before touching Zoho: a conditional update keyed on the
+  // status just read only succeeds for the first caller. Two concurrent
+  // approvals of the same deposit (double-click, a retried request) would
+  // otherwise both pass the status check above and both push the same bank
+  // transaction to Zoho.
+  const claim = await prisma.deposit.updateMany({
+    where: { id: depositId, status: deposit.status },
     data: {
       status:            'APPROVED',
       categorizedAs:     finalLabel,
@@ -731,7 +731,25 @@ async function approveDeposit({ depositId, accountId, label }) {
       approvedAt:        new Date(),
     },
   })
+  if (claim.count === 0) {
+    const fresh = await prisma.deposit.findUnique({ where: { id: depositId } })
+    return { ok: true, already: true, deposit: fresh }
+  }
 
+  try {
+    // Push the categorization into Zoho Books so the transaction actually
+    // leaves "Uncategorized" there too, not just in our local mirror.
+    await booksPost(`/banktransactions/${deposit.zohoBankTxnId}/categorize`, {
+      account_id: finalAccountId,
+    })
+  } catch (e) {
+    // Revert the claim so a retry can actually reach Zoho instead of being
+    // told "already approved" for a categorization that never landed.
+    await prisma.deposit.update({ where: { id: depositId }, data: { status: deposit.status } }).catch(() => {})
+    throw e
+  }
+
+  const updated = await prisma.deposit.findUnique({ where: { id: depositId } })
   rememberCategorization(deposit.orgNameRaw, finalAccountId, finalLabel).catch(() => {})
 
   return { ok: true, deposit: updated }
@@ -798,14 +816,18 @@ export default async function handler(req, res) {
       return res.json(result)
     }
 
-    // STEP 0 — idempotently create / verify Zoho Books accounts
-    const accountSetup = await setupAccounts()
-
     if (task === 'setup') {
+      const accountSetup = await setupAccounts()
       return res.json({ ok: true, accounts: accountSetup })
     }
 
     if (task === 'seed-stores') {
+      // Still idempotently verify accounts exist before seeding stores —
+      // just not on every default reconcile run below, which never uses
+      // this result (loadAccountIds() reads the already-seeded Setting rows
+      // directly) and was paying for a full Zoho chart-of-accounts fetch on
+      // every cron tick for nothing.
+      const accountSetup = await setupAccounts()
       const result = await seedTeamStores()
       return res.json({ ok: true, accounts: accountSetup, seedStores: result })
     }
@@ -832,11 +854,14 @@ export default async function handler(req, res) {
       pollAccounts.push({ id: accountIds.creditCard, source: 'creditcard', label: 'Credit Card', txnType: 'expense' })
     }
 
-    // STEP 2 — fetch uncategorized transactions from each account
+    // STEP 2 — fetch uncategorized transactions from each account (independent, run concurrently)
     const allTxns = []
-    const accountsPolled = []
-    for (const acct of pollAccounts) {
+    const polled = await Promise.all(pollAccounts.map(async acct => {
       const txns = await fetchUncategorized(acct.id, limit, acct.txnType)
+      return { acct, txns }
+    }))
+    const accountsPolled = []
+    for (const { acct, txns } of polled) {
       accountsPolled.push({ label: acct.label, source: acct.source, found: txns.length })
       for (const t of txns) allTxns.push({ ...t, account_id: acct.id, _source: acct.source, _label: acct.label, _txnType: acct.txnType })
     }
@@ -909,7 +934,6 @@ export default async function handler(req, res) {
     return res.json({
       ok:     true,
       dryRun,
-      accounts: accountSetup,
       accountsPolled,
       message: zeroPolledHint,
       totals: {

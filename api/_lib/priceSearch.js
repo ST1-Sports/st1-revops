@@ -164,10 +164,6 @@ export function dealerCostOf(item) {
   return Number.isFinite(n) && n > 0 ? n : null;
 }
 
-export function productMatchKey(item) {
-  return productFamilyKey(item);
-}
-
 function digitCount(token) {
   return (String(token || '').match(/\d/g) || []).length;
 }

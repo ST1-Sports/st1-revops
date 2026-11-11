@@ -16,13 +16,7 @@ const { generateSearchQueries } = require('../reddit/services/query-generator');
 const { ingestThreads }         = require('../reddit/services/ingestion');
 const { evaluateThread }        = require('../reddit/services/evaluator');
 const { generateReplies }       = require('../reddit/services/reply-generator');
-const { PrismaClient }          = require('@prisma/client');
-
-let _prisma;
-function getPrisma() {
-  if (!_prisma) _prisma = new PrismaClient();
-  return _prisma;
-}
+const { getPrisma }             = require('../reddit/services/_prisma');
 
 function sleep(ms) {
   return new Promise(r => setTimeout(r, ms));

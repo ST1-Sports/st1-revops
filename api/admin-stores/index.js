@@ -7,6 +7,9 @@
  */
 
 import { setCors } from '../_lib/cors.js';
+import { poolMap } from '../_lib/teamStoreSync.js';
+
+const DETAIL_CONCURRENCY = 5; // same cap as teamStoreSync.js — unpooled detail calls outrun the admin-app token
 
 const API_BASE = 'https://api.st1sports.com/admin';
 
@@ -181,19 +184,19 @@ export default async function handler(req, res) {
         page++;
       }
 
-      // Fetch individual order detail for every order in parallel (items array lives here)
+      // Fetch individual order detail for every order (items array lives here), pooled
+      // to a small concurrency cap — thousands of orders fired at once outran the
+      // admin-app token the same way teamStoreSync.js's own detail calls once did.
       const auth = _auth;
       const ah = { 'Accept': 'application/json', ...BROWSER_HEADERS, ...buildAuthHeaders(auth) };
-      const details = await Promise.all(
-        allOrders.map(async order => {
-          const storeName = order.teamStore?.name || order.storeName || order.store_name || 'Unknown Store';
-          try {
-            const r = await fetch(`${API_BASE}/team_store_order/${order.id}`, { headers: ah, signal: AbortSignal.timeout(8000) });
-            if (r.ok) return { storeName, detail: await r.json() };
-          } catch {}
-          return { storeName, detail: null };
-        })
-      );
+      const details = await poolMap(allOrders, DETAIL_CONCURRENCY, async order => {
+        const storeName = order.teamStore?.name || order.storeName || order.store_name || 'Unknown Store';
+        try {
+          const r = await fetch(`${API_BASE}/team_store_order/${order.id}`, { headers: ah, signal: AbortSignal.timeout(8000) });
+          if (r.ok) return { storeName, detail: await r.json() };
+        } catch {}
+        return { storeName, detail: null };
+      });
 
       // Aggregate by product name
       const productMap = {};

@@ -1,3 +1,5 @@
+import { internalAuthHeaders } from '../internalAuth.js'
+
 /**
  * Ledger — ST1's finance/accounting agent.
  *
@@ -66,7 +68,7 @@ export default {
 
     const r = await fetch(endpoint, {
       method:  'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...internalAuthHeaders() },
       body:    JSON.stringify(body),
     })
     if (!r.ok) throw new Error(`Ledger ${r.status}: ${await r.text().catch(() => '')}`)

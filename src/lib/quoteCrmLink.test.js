@@ -2,10 +2,13 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   orgNamesMatch,
+  looseSchoolNameMatch,
+  schoolCoreName,
   resolveQuoteCrmTarget,
   dealBelongsToSchool,
   dealBelongsToContact,
   contactBelongsToSchoolKey,
+  accountBelongsToSchoolKey,
   buildLocalQuoteDeal,
   findExistingQuoteDeal,
   mergeAccountGroups,
@@ -37,6 +40,26 @@ describe('orgNamesMatch', () => {
   it('does not merge different schools that do not contain each other', () => {
     assert.equal(orgNamesMatch('Lincoln High School', 'Lincoln Middle School'), false);
     assert.equal(orgNamesMatch('Iowa', 'Iowa City High'), false);
+  });
+});
+
+describe('looseSchoolNameMatch / schoolCoreName', () => {
+  it('matches an abbreviated suffix that plain substring-includes cannot ("Glenwood HS" vs "Glenwood High School")', () => {
+    assert.equal(orgNamesMatch('Glenwood HS', 'Glenwood High School'), false);
+    assert.equal(looseSchoolNameMatch('Glenwood HS', 'Glenwood High School'), true);
+  });
+
+  it('still matches anything orgNamesMatch already catches', () => {
+    assert.equal(looseSchoolNameMatch('Hudson', 'Hudson High School'), true);
+  });
+
+  it('does not fold two different core names together', () => {
+    assert.equal(looseSchoolNameMatch('Glenwood HS', 'Lincoln High School'), false);
+  });
+
+  it('accepts a precomputed coreA to skip recomputation', () => {
+    const coreA = schoolCoreName('Glenwood HS');
+    assert.equal(looseSchoolNameMatch('Glenwood HS', 'Glenwood High School', coreA), true);
   });
 });
 
@@ -93,6 +116,21 @@ describe('dealBelongsToSchool / contactBelongsToSchoolKey', () => {
   it('shows a deal linked by contactId even when school is blank', () => {
     const deal = { id: 'd2', school: '', contactId: 'c_hudson_ad', stage: 'Quoted' };
     assert.equal(dealBelongsToSchool(deal, [hudsonCoach], 'Hudson High School'), true);
+  });
+
+  it('trusts a matching accountId over fuzzy name/contact matching', () => {
+    const deal = { id: 'd5', school: 'Some Other Name Entirely', contactId: 'nobody', accountId: 'acct_1' };
+    assert.equal(dealBelongsToSchool(deal, [hudsonCoach], 'Hudson High School', 'acct_1'), true);
+  });
+
+  it('does not show a deal tagged to a different account, even if the name would otherwise fuzzy-match', () => {
+    const deal = { id: 'd6', school: 'Hudson High School', accountId: 'acct_other' };
+    assert.equal(dealBelongsToSchool(deal, [hudsonCoach], 'Hudson High School', 'acct_1'), false);
+  });
+
+  it('falls back to fuzzy matching for a deal that predates account tagging', () => {
+    const deal = { id: 'd7', school: 'Hudson', contact: '' };
+    assert.equal(dealBelongsToSchool(deal, [hudsonCoach], 'Hudson High School', 'acct_1'), true);
   });
 
   it('puts a school-only Hudson deal on every Hudson coach', () => {
@@ -187,6 +225,75 @@ describe('mergeAccountGroups + attachOpenDealsToAccountGroups', () => {
     };
     assert.equal(Object.keys(mergeAccountGroups(groups)).length, 2);
   });
+
+  it('folds "Glenwood HS" into "Glenwood High School" even though neither contains the other', () => {
+    const groups = {
+      'Glenwood High School — IA': {
+        name: 'Glenwood High School',
+        contacts: [{ id: 'c1', school: 'Glenwood High School', state: 'IA' }],
+        deals: [],
+        value: 0,
+      },
+      'Glenwood HS — IA': {
+        name: 'Glenwood HS',
+        contacts: [{ id: 'c2', school: 'Glenwood HS', state: 'IA' }],
+        deals: [],
+        value: 0,
+      },
+    };
+    const merged = mergeAccountGroups(groups);
+    assert.equal(Object.keys(merged).length, 1);
+    const g = Object.values(merged)[0];
+    assert.equal(g.contacts.length, 2);
+  });
+
+  it('carries a manually-created account shell\'s id/domain/orgType through a merge with a contact-derived group', () => {
+    const groups = {
+      'Riverside Academy — CO': {
+        name: 'Riverside Academy',
+        contacts: [],
+        deals: [],
+        value: 0,
+        invoiced: false,
+        accountId: 'acct_1',
+        domain: 'riverside.org',
+        orgType: 'school',
+        city: 'Denver',
+        state: 'CO',
+      },
+      'Riverside Academy School — CO': {
+        name: 'Riverside Academy School',
+        contacts: [{ id: 'c1', school: 'Riverside Academy School', state: 'CO' }],
+        deals: [],
+        value: 0,
+        invoiced: false,
+      },
+    };
+    const merged = mergeAccountGroups(groups);
+    assert.equal(Object.keys(merged).length, 1);
+    const g = Object.values(merged)[0];
+    assert.equal(g.contacts.length, 1);
+    assert.equal(g.accountId, 'acct_1');
+    assert.equal(g.domain, 'riverside.org');
+    assert.equal(g.orgType, 'school');
+  });
+});
+
+describe('accountBelongsToSchoolKey', () => {
+  it('matches an account shell to its own school key', () => {
+    const account = { id: 'acct_1', name: 'Riverside Academy', state: 'CO' };
+    assert.equal(accountBelongsToSchoolKey(account, 'Riverside Academy — CO'), true);
+  });
+
+  it('matches loosely on a spelling variant, same as looseSchoolNameMatch', () => {
+    const account = { id: 'acct_1', name: 'Glenwood HS', state: 'IA' };
+    assert.equal(accountBelongsToSchoolKey(account, 'Glenwood High School — IA'), true);
+  });
+
+  it('does not match a different account in a different state', () => {
+    const account = { id: 'acct_1', name: 'Lincoln High School', state: 'TX' };
+    assert.equal(accountBelongsToSchoolKey(account, 'Lincoln High School — IA'), false);
+  });
 });
 
 describe('lineItemsToQuoteItems', () => {
@@ -243,7 +350,7 @@ describe('mergeZohoContactRow', () => {
 });
 
 describe('mergeContactsPreferRecentSaves', () => {
-  it('keeps server membership and overlays a recent local save', () => {
+  it('overlays a recent local save onto the matching server record', () => {
     const now = 1_700_000_000_000;
     const out = mergeContactsPreferRecentSaves(
       [{ id: 'zoho_c_1', email: 'new@x.com', profileSavedAt: now - 1000 }],
@@ -253,6 +360,18 @@ describe('mergeContactsPreferRecentSaves', () => {
     assert.equal(out.length, 2);
     assert.equal(out[0].email, 'new@x.com');
     assert.equal(out[1].email, 'other@x.com');
+  });
+
+  it('keeps a contact only the local side currently knows about, instead of dropping it', () => {
+    // The reported "Parker Kennedy disappears" bug: this device's contacts
+    // include Parker, but the server pull it's merging against doesn't (a
+    // different device posted a stale snapshot). Parker must survive.
+    const out = mergeContactsPreferRecentSaves(
+      [{ id: 'zoho_c_parker', fullName: 'Parker Kennedy' }],
+      [{ id: 'zoho_c_2', fullName: 'Someone Else' }],
+    );
+    const ids = out.map(c => c.id).sort();
+    assert.deepEqual(ids, ['zoho_c_2', 'zoho_c_parker']);
   });
 });
 
@@ -272,5 +391,20 @@ describe('crmNavForDeal', () => {
     assert.equal(nav.id, undefined);
     assert.equal(nav.school, 'Hudson High School — IA');
     assert.equal(nav.tab, 'deal');
+  });
+
+  it('routes to the account, not the contact, once a deal carries accountId — even when a matching contact exists', () => {
+    const nav = crmNavForDeal(
+      { id: 'd3', contactId: 'c_hudson_ad', accountId: 'acct_1', school: 'Hudson High School', state: 'IA' },
+      [hudsonCoach],
+    );
+    assert.equal(nav.id, undefined);
+    assert.equal(nav.school, 'Hudson High School — IA');
+    assert.equal(nav.tab, 'deal');
+  });
+
+  it('skips an unusable school name on an accountId deal rather than guessing from the contact', () => {
+    const nav = crmNavForDeal({ id: 'd4', contactId: 'c_hudson_ad', accountId: 'acct_1', school: '' }, [hudsonCoach]);
+    assert.equal(nav, null);
   });
 });

@@ -3,6 +3,7 @@ import { useNavigate, useLocation, Link } from "react-router-dom";
 import * as bgTasks from "../lib/bgTasks.js";
 import { mergeById, APP_STATE_KEY } from "../lib/appStateSync.js";
 import { dealIsSuppressed, filterLiveDeals, filterRealDeals, mergeIdLists, suppressFromRemovedDeals } from "../lib/dealTombstone.js";
+import { filterLiveContacts, suppressFromRemovedContacts } from "../lib/contactTombstone.js";
 import { pathToMod, modToPath, prospectTabFromSearch, prospectPath, crmPath } from "../lib/pages.js";
 import { assistantBubbleText, ChatProse, EdgarQuoteCard, ScoutPriceCard, ZohoQuoteForm } from "../components/ScoutChatBits.jsx";
 import { dedupeChatActions } from "../lib/chatActions.js";
@@ -13,6 +14,7 @@ import {
   schoolKeyOf,
   cleanSchoolName,
   contactBelongsToSchoolKey,
+  accountBelongsToSchoolKey,
   dealBelongsToSchool,
   dealBelongsToContact,
   resolveQuoteCrmTarget,
@@ -26,9 +28,39 @@ import {
   mergeContactsPreferRecentSaves,
   crmNavForDeal,
 } from "../lib/quoteCrmLink.js";
+import {
+  ANALYTICS_TABS,
+  analyticsKpis,
+  buildKeyAccounts,
+  dealsForFilter,
+  doubleDownItems,
+  matchesAnalyticsQuery,
+  pipelineByProduct,
+  pipelineByStage,
+  dealAttention,
+  dealStagePatch,
+  liveDealFromList,
+  plusDaysISO,
+  rankAttentionDeals,
+  rankOpenDeals,
+  storyBeats,
+} from "../lib/analyticsStory.js";
 import { buildLockedQuotePayload } from "../lib/quoteLock.js";
+import {
+  emptyQuoteLine,
+  filledQuoteLines,
+  normalizeQuoteLines,
+  parseQuoteLinesFromDescription,
+  quoteFieldsFromZohoRecord,
+  quoteLinesForDeal,
+  quoteLinesSummary,
+  quoteLinesTotal,
+  quoteNotesFromDescription,
+} from "../lib/quoteLines.js";
 import { fetchAllAreaContactIds, createOutreachBatchFromIds, listNameForArea, outreachPathForBatch } from "../lib/prospectingOutreach.js";
 import { isBradFollowUpReply } from "../lib/junkReply.js";
+import { COACH_ROLES } from "../../api/_lib/roleUtils.js";
+import { internalAuthHeaders } from "../lib/internalAuth.js";
 const HOME_AGENT_NAME = "Scout";
 const CmdCenter      = lazy(() => import('./CommandCenter.jsx'))
 const ExpansionPage  = lazy(() => import('./Expansion.jsx'))
@@ -37,6 +69,8 @@ const IntegrationsPage = lazy(() => import('./Integrations.jsx'))
 const TeamStoresPage = lazy(() => import('./TeamStores.jsx'))
 const FlagshipStorePage = lazy(() => import('./FlagshipStore.jsx'))
 const BulkOutreachPage = lazy(() => import('./BulkOutreach.jsx'))
+const TeamStoreStatementPage = lazy(() => import('./TeamStoreStatement.jsx'))
+const TeamStoreReconcilePage = lazy(() => import('./TeamStoreReconcile.jsx'))
 function usePrefetchPanels() {
 useEffect(() => {
 import('./CommandCenter.jsx');
@@ -147,6 +181,7 @@ invoices: [],
 rfps: [],
 reorders: [],
 contacts: [],
+accounts: [],
 sequences: [],
 competeIntel: {},
 battlecards: {},
@@ -154,6 +189,8 @@ prospectAreas: [],
 agentHistory: [],
 suppressedDealZohoIds: [],
 suppressedDealIds: [],
+suppressedContactZohoIds: [],
+suppressedContactIds: [],
 agentDraft: "",
 edgarDraft: "",
 lastBriefDate: null,
@@ -348,8 +385,7 @@ ctx.toast(`Email sent to ${action.to_name||action.to_email}`,"success");
 ctx.dispatch("LOG",{msg:`Email sent to ${action.to_name||action.to_email}: "${action.subject}"`});
 const contact=(ctx.contacts||[]).find(c=>c.email===action.to_email);
 if(contact)ctx.dispatch("SCORE_CONTACT",{contactId:contact.id,type:"sent",campaignId:"agent_email",note:`Agent email: ${action.subject}`});
-const nameParts=(action.to_name||"").toLowerCase().split(" ");
-const matchDeal=(ctx.deals||[]).find(d=>{const dn=(d.name||"").toLowerCase();return nameParts.some(p=>p.length>2&&dn.includes(p))||(contact?.school&&dn.includes((contact.school||"").toLowerCase().slice(0,6)));});
+const matchDeal=contact&&(ctx.deals||[]).find(d=>d.contactId===contact.id);
 if(matchDeal&&!matchDeal.followUpDate){const f=new Date(Date.now()+3*86400000).toISOString().slice(0,10);ctx.dispatch("UPDATE_DEAL",{id:matchDeal.id,followUpDate:f});ctx.toast(`Follow-up auto-set ${f}`,"info");}
 setTimeout(()=>sendFn(`Email sent ✓ to ${action.to_name||action.to_email} — "${action.subject}". Auto-execute: log this touch and schedule follow-up.`),600);
 }else{ctx.toast(d.error||"Send failed","error");}
@@ -376,10 +412,22 @@ if(!r.ok||d.error){ctx.toast(`Removed here — Zoho said: ${d.error||r.status}. 
 ctx.toast(`"${deal.name}" deleted`,"success");
 return true;
 }
+// /api/state's GET redacts appUsers[].pin before it ever reaches the browser
+// (see api/state.js) — the merge below has to keep whatever pin this device
+// already knows locally instead of letting the pin-less server copy wipe it,
+// or nobody could log in again until the next SET_APP_USER.
+function mergeAppUsers(local, server) {
+if (!Array.isArray(server)) return Array.isArray(local) ? local : [];
+const localByRep = {};
+for (const u of (local||[])) if (u?.repId) localByRep[u.repId] = u;
+return server.filter(u=>u?.repId).map(u=>({...localByRep[u.repId], ...u, pin: localByRep[u.repId]?.pin}));
+}
 function mergeServerState(base, server) {
 if (!server || typeof server !== "object") return base;
 const suppressedDealIds = mergeIdLists(base.suppressedDealIds, server.suppressedDealIds);
 const suppressedDealZohoIds = mergeIdLists(base.suppressedDealZohoIds, server.suppressedDealZohoIds);
+const suppressedContactIds = mergeIdLists(base.suppressedContactIds, server.suppressedContactIds);
+const suppressedContactZohoIds = mergeIdLists(base.suppressedContactZohoIds, server.suppressedContactZohoIds);
 return {
 ...base,
 ...server,
@@ -388,15 +436,18 @@ integrations: {...(base.integrations||{}), ...(typeof server.integrations==="obj
 company:      {...(base.company||{}),      ...(typeof server.company==="object"     &&server.company     ?server.company     :{})},
 agentHistory: Array.isArray(base.agentHistory) ? base.agentHistory : (Array.isArray(server.agentHistory) ? server.agentHistory.slice(-40) : []),
 campaigns:    mergeById(base.campaigns,    server.campaigns),
-// Contacts stay server-authored for membership (so a Zoho delete stays
-// gone) but a profile Matt just saved must win over a stale /api/state
-// pull — otherwise Hudson email/phone edits vanish on the next sync.
-contacts:     mergeContactsPreferRecentSaves(base.contacts, server.contacts),
+// Contacts union both sides — see contactTombstone.js. Membership only
+// ever shrinks via an explicit tombstone; a profile Matt just saved still
+// wins over a stale /api/state pull (mergeContactsPreferRecentSaves).
+suppressedContactIds,
+suppressedContactZohoIds,
+contacts:     filterLiveContacts(mergeContactsPreferRecentSaves(base.contacts, server.contacts), { suppressedContactIds, suppressedContactZohoIds }),
 contactLists: mergeById(base.contactLists, server.contactLists),
 suppressedDealIds,
 suppressedDealZohoIds,
 deals: filterLiveDeals(mergeById(base.deals, server.deals), { suppressedDealIds, suppressedDealZohoIds }),
 rfps:         mergeById(base.rfps,         server.rfps),
+accounts:     mergeById(base.accounts,     server.accounts),
 invoices:     mergeById(base.invoices,     server.invoices),
 reorders:     mergeById(base.reorders,     server.reorders),
 brandAssets:  mergeById(base.brandAssets,  server.brandAssets),
@@ -408,12 +459,14 @@ orders:       mergeById(base.orders,       server.orders),
 alerts:       mergeById(base.alerts,       server.alerts),
 activity:     mergeById(base.activity,     server.activity),
 priceLists:   mergeById(base.priceLists,   server.priceLists),
+appUsers:     mergeAppUsers(base.appUsers, server.appUsers),
 };
 }
 function useStore() {
 const saveTimer = useRef(null);
 const serverTimer = useRef(null);
 const pollTimer = useRef(null);
+const pendingServerSave = useRef(null); // state not yet flushed to /api/state — read by the unload flush below
 const [s, setRaw] = useState(() => {
 try {
 const saved = localStorage.getItem(STORE);
@@ -423,6 +476,7 @@ return {...SEED,...p,
 deals:        filterLiveDeals(sanitizeLookupFields(Array.isArray(p.deals) ? p.deals : [], ["school","contact"]), p),
 invoices:     Array.isArray(p.invoices)     ? p.invoices     : [],
 rfps:         Array.isArray(p.rfps)         ? p.rfps         : [],
+accounts:     Array.isArray(p.accounts)     ? p.accounts     : [],
 reorders:     sanitizeLookupFields(Array.isArray(p.reorders) ? p.reorders : [], ["school","contact"]),
 contacts:     sanitizeLookupFields(Array.isArray(p.contacts) ? p.contacts : [], ["school","title"]),
 sequences:    Array.isArray(p.sequences)    ? p.sequences    : [],
@@ -504,14 +558,35 @@ const doSave = () => { try { localStorage.setItem(STORE, JSON.stringify(next)); 
 if (typeof requestIdleCallback !== "undefined") requestIdleCallback(doSave, {timeout:2000});
 else doSave();
 }, 300);
+const {currentUserId: _cid, agentHistory: _ah, ...toSync} = next;
+pendingServerSave.current = toSync;
 if (serverTimer.current) clearTimeout(serverTimer.current);
 serverTimer.current = setTimeout(() => {
-const {currentUserId: _cid, agentHistory: _ah, ...toSync} = next;
 fetch("/api/state", {method:"POST", headers:{"Content-Type":"application/json"},
 body: JSON.stringify({state: toSync})}).catch(()=>{});
+pendingServerSave.current = null;
 }, 2500);
 return next;
 });
+}, []);
+// The 2.5s debounce above means a tab closed/refreshed right after a save action
+// (upload a PDF, add a deal — anywhere the user sees a "saved" toast) can drop
+// that change entirely if nothing ever flushes it. sendBeacon still gets a best-
+// effort delivery attempt during unload, unlike a fetch the browser can cancel.
+useEffect(() => {
+const flush = () => {
+if (!pendingServerSave.current) return;
+try {
+navigator.sendBeacon?.('/api/state', new Blob([JSON.stringify({state: pendingServerSave.current})], {type: 'application/json'}));
+} catch {}
+};
+const onVisibility = () => { if (document.visibilityState === 'hidden') flush(); };
+window.addEventListener('beforeunload', flush);
+document.addEventListener('visibilitychange', onVisibility);
+return () => {
+window.removeEventListener('beforeunload', flush);
+document.removeEventListener('visibilitychange', onVisibility);
+};
 }, []);
 return [s, set, lastSynced, syncing, pullFromServer];
 }
@@ -527,7 +602,7 @@ if(/wrestling/.test(t)) return "Wrestling";
 return "General";
 }
 async function zohoCall(service, endpoint, method="GET", body=null) {
-const r = await fetch("/api/zoho",{method:"POST",headers:{"Content-Type":"application/json"},
+const r = await fetch("/api/zoho",{method:"POST",headers:{"Content-Type":"application/json",...internalAuthHeaders()},
 body:JSON.stringify({service,endpoint,method,...(body?{body}:{})})});
 if(!r.ok) throw new Error(`Zoho proxy ${r.status}`);
 return r.json();
@@ -536,7 +611,7 @@ async function pushActivityToZoho(contact, activityNote) {
 const zid=zohoIdFromContact(contact);
 if (!zid) return;
 try {
-await fetch("/api/zoho", {method:"POST", headers:{"Content-Type":"application/json"},
+await fetch("/api/zoho", {method:"POST", headers:{"Content-Type":"application/json",...internalAuthHeaders()},
 body: JSON.stringify({
 service: "crm",
 endpoint: `/Activities`,
@@ -546,15 +621,60 @@ body: { data: [{ Subject: activityNote, Activity_Type: "Email", Due_Date: new Da
 });
 } catch {}
 }
-const crmCreate=(module,data)=>fetch("/api/zoho",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({service:"crm",endpoint:`/${module}`,method:"POST",body:{data:[data]}})}).catch(()=>{});
-const crmUpdate=(module,zohoId,fields)=>zohoId?fetch("/api/zoho",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({service:"crm",endpoint:`/${module}/${zohoId}`,method:"PUT",body:{data:[{id:zohoId,...fields}]}})}).catch(()=>{}):null;
-const crmAddNote=(module,zohoId,content)=>zohoId?fetch("/api/zoho",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({service:"crm",endpoint:"/Notes",method:"POST",body:{data:[{Note_Title:"RevOps Note",Note_Content:content,Parent_Id:{id:zohoId},se_module:module}]}})}).catch(()=>{}):null;
+const crmCreate=(module,data)=>fetch("/api/zoho",{method:"POST",headers:{"Content-Type":"application/json",...internalAuthHeaders()},body:JSON.stringify({service:"crm",endpoint:`/${module}`,method:"POST",body:{data:[data]}})}).catch(()=>{});
+const crmUpdate=(module,zohoId,fields)=>zohoId?fetch("/api/zoho",{method:"POST",headers:{"Content-Type":"application/json",...internalAuthHeaders()},body:JSON.stringify({service:"crm",endpoint:`/${module}/${zohoId}`,method:"PUT",body:{data:[{id:zohoId,...fields}]}})}).catch(()=>{}):null;
+function persistDealQuoteLines(deal, items, {dispatch, toast} = {}) {
+  const cleaned = filledQuoteLines(items);
+  const total = quoteLinesTotal(cleaned);
+  dispatch?.("UPDATE_DEAL", {
+    id: deal.id,
+    quoteItems: cleaned,
+    quoteAmount: total,
+    value: total,
+    product: cleaned[0]?.name || deal.product || "",
+    lastTouch: Date.now(),
+    ...(deal.quoteNumber != null ? { quoteNumber: deal.quoteNumber } : {}),
+  });
+  if (!deal.zohoId) {
+    toast?.("Quote lines saved", "success");
+    return Promise.resolve({ ok: true, localOnly: true, items: cleaned, amount: total });
+  }
+  return fetch("/api/crm/deal-lines", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      dealId: deal.zohoId,
+      quoteId: deal.zohoQuoteId || null,
+      accountName: deal.school || deal.company || "",
+      accountCity: deal.city || "",
+      accountState: deal.state || "",
+      items: cleaned,
+      notes: quoteNotesFromDescription(deal.quoteNotes || deal.notes || ""),
+    }),
+  }).then(r => r.json()).then(d => {
+    if (d?.quoteId && d.quoteId !== deal.zohoQuoteId) {
+      dispatch?.("UPDATE_DEAL", { id: deal.id, zohoQuoteId: d.quoteId });
+    }
+    if (d?.ok) {
+      toast?.(d.zohoWroteLines
+        ? "Quote lines saved to Zoho CRM"
+        : "Quote saved on the Zoho deal (description)", "success");
+    } else {
+      toast?.(d?.error || "Could not save lines to Zoho", "error");
+    }
+    return d;
+  }).catch(err => {
+    toast?.(`Quote saved locally — Zoho: ${err.message}`, "info");
+    return { ok: false, error: err.message };
+  });
+}
+const crmAddNote=(module,zohoId,content)=>zohoId?fetch("/api/zoho",{method:"POST",headers:{"Content-Type":"application/json",...internalAuthHeaders()},body:JSON.stringify({service:"crm",endpoint:"/Notes",method:"POST",body:{data:[{Note_Title:"RevOps Note",Note_Content:content,Parent_Id:{id:zohoId},se_module:module}]}})}).catch(()=>{}):null;
 const pushDealToZoho=(fields)=>fetch("/api/crm/deal",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(fields)}).then(r=>r.json()).catch(()=>({}));
 // Fires exactly once, on the transition into Closed Won — auto-drafts (not sends) an
 // invoice with the ledger agent so it's waiting for review in Finance the moment a deal closes.
 const autoInvoiceOnClosedWon=(deal,prevStage,newStage,toast)=>{
 if(newStage!=="Closed Won"||prevStage==="Closed Won")return;
-fetch("/api/agents/ledger/invoice",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({
+fetch("/api/agents/ledger/invoice",{method:"POST",headers:{"Content-Type":"application/json",...internalAuthHeaders()},body:JSON.stringify({
 action:"draft",dryRun:false,
 crmDealId:deal.zohoId||undefined,
 crmDealName:deal.name,
@@ -595,6 +715,44 @@ return false;
 // real "sports" a coverage gap could ever be filled for.
 const COMMON_SPORTS=["Football","Basketball","Baseball","Softball","Soccer","Volleyball","Track & Field","Cross Country","Wrestling","Swimming & Diving","Tennis","Golf","Hockey","Lacrosse","Gymnastics","Cheerleading","Dance","Bowling","Badminton","Water Polo","Rowing / Crew","Multiple Sports","All Sports / General"];
 const ACCOUNT_SPORTS=COMMON_SPORTS.filter(sp=>!["Multiple Sports","All Sports / General"].includes(sp));
+// "club" already existed elsewhere (Prospecting's area-browse tags youth
+// sports clubs this way) — reused here rather than inventing a second,
+// conflicting value for the same concept at the Account level.
+//
+// Single source of truth for "what does this org type get" — added so the
+// next org type (or the next field) is one new entry here, not another
+// isBusinessOrg-style check copy-pasted into every section that happens to
+// need it. Every place that used to ask "is this a business/school/club"
+// directly should ask ORG_TYPE_CONFIG[orgType].<flag> instead.
+//   label             — display name (header, Org Type dropdowns, etc.)
+//   schoolClass       — show the 1A–6A classification field
+//   athleteCount      — show a manually-entered "# Athletes" number
+//   boosterClub       — show the Booster Club Yes/No field
+//   teamStore         — show the Team Store section (every type gets this —
+//                        a business reselling or a club with merch is just
+//                        as real a team-store customer as a school)
+//   sportsMode        — "exclude": track all ACCOUNT_SPORTS, opt a sport OUT
+//                        one at a time once confirmed they don't run it
+//                        (schools/colleges — most run most sports, a few
+//                        exceptions). "include": start from nothing, opt
+//                        sports IN by picking exactly what the org offers
+//                        (clubs — usually just one or two sports, "assume
+//                        everything" would be mostly wrong). "none": no
+//                        sports concept at all (business).
+//   athleticDirector  — track an Athletic Director as its own role
+//   requireContactTitle — a contact added under this org can't be saved
+//                        without a Title/Role (clubs/businesses have no
+//                        implied role the way "a school contact probably
+//                        coaches something" does for schools)
+const ORG_TYPE_CONFIG={
+  school:  {label:"School / District",   schoolClass:true,  athleteCount:true,  boosterClub:true,  teamStore:true, sportsMode:"exclude", athleticDirector:true,  requireContactTitle:false},
+  college: {label:"College / University",schoolClass:false, athleteCount:true,  boosterClub:true,  teamStore:true, sportsMode:"exclude", athleticDirector:true,  requireContactTitle:false},
+  club:    {label:"Sports Club",         schoolClass:false, athleteCount:true,  boosterClub:false, teamStore:true, sportsMode:"include", athleticDirector:false, requireContactTitle:true},
+  business:{label:"Business",            schoolClass:false, athleteCount:false, boosterClub:false, teamStore:true, sportsMode:"none",    athleticDirector:false, requireContactTitle:true},
+};
+const DEFAULT_ORG_TYPE_CONFIG=ORG_TYPE_CONFIG.school;
+const orgTypeConfig=(t)=>ORG_TYPE_CONFIG[t]||DEFAULT_ORG_TYPE_CONFIG;
+const orgTypeLabel=(t)=>ORG_TYPE_CONFIG[t]?.label||"Organization";
 const SPORT_TITLE_PATTERNS=[
 [/track|cross.?country|\bxc\b|t&f/i,"Track & Field"],
 [/football/i,"Football"],[/basketball/i,"Basketball"],[/baseball/i,"Baseball"],
@@ -612,8 +770,14 @@ return null;
 // Given all contacts at one account, work out who the AD is (if known) and
 // which sports have a coach on file vs. which are gaps — this is the data
 // that should get filled in once positive intent shows up at that school.
+// "Athletic Director" alone missed real titles people actually use —
+// "Director of Athletics" (reversed word order) and "Activities Director"
+// (the common combined role at smaller schools) are at least as frequent,
+// and a contact with either title was showing as "not on file" even
+// though the AD genuinely was on file, just under a different phrasing.
+const AD_TITLE_RE=/athletic(s)?\s+director|director\s+of\s+athletics|activities?\s+director/i;
 function computeAccountCoverage(schoolContacts) {
-const adContact=schoolContacts.find(c=>/athletic director/i.test(c.title||""))||null;
+const adContact=schoolContacts.find(c=>AD_TITLE_RE.test(c.title||""))||null;
 const covered=new Map();
 schoolContacts.forEach(c=>{
 let sp=typeof c.sport==="string"?c.sport:c.sport?.name||"";
@@ -702,6 +866,16 @@ suppressedDealIds:mergeIdLists(prev.suppressedDealIds,tomb.suppressedDealIds),
 suppressedDealZohoIds:mergeIdLists(prev.suppressedDealZohoIds,tomb.suppressedDealZohoIds),
 };
 }
+case "REMOVE_CONTACTS": {
+const gone=(prev.contacts||[]).filter(c=>payload.includes(c.id));
+const tomb=suppressFromRemovedContacts(gone,payload);
+return {
+...prev,
+contacts:(prev.contacts||[]).filter(c=>!payload.includes(c.id)),
+suppressedContactIds:mergeIdLists(prev.suppressedContactIds,tomb.suppressedContactIds),
+suppressedContactZohoIds:mergeIdLists(prev.suppressedContactZohoIds,tomb.suppressedContactZohoIds),
+};
+}
 case "ADD_CONTACTS":      return {...prev, contacts:[...payload,...(prev.contacts||[])]};
 case "UPDATE_CONTACT":      return {...prev, contacts:(prev.contacts||[]).map(c=>c.id===payload.id?{...c,...payload}:c)};
 // One-time reset after the out-of-office/bounce auto-reply scoring bug —
@@ -733,7 +907,10 @@ case "DEL_CONTACT_LIST":    return {...prev, contactLists:(prev.contactLists||[]
 case "ADD_REP":             return {...prev, reps:[...(prev.reps||[]),payload]};
 case "UPDATE_REP":          return {...prev, reps:(prev.reps||[]).map(r=>r.id===payload.id?{...r,...payload}:r)};
 case "DEL_REP":             return {...prev, reps:(prev.reps||[]).filter(r=>r.id!==payload)};
-case "SET_APP_USER":        return {...prev, appUsers:[...(prev.appUsers||[]).filter(u=>u.repId!==payload.repId),payload]};
+case "ADD_ACCOUNT":         return {...prev, accounts:[payload,...(prev.accounts||[])]};
+case "UPDATE_ACCOUNT":      return {...prev, accounts:(prev.accounts||[]).map(a=>a.id===payload.id?{...a,...payload}:a)};
+case "DELETE_ACCOUNT":      return {...prev, accounts:(prev.accounts||[]).filter(a=>a.id!==payload)};
+case "SET_APP_USER":        {const existingAu=(prev.appUsers||[]).find(u=>u.repId===payload.repId);return {...prev, appUsers:[...(prev.appUsers||[]).filter(u=>u.repId!==payload.repId),{...existingAu,...payload}]};}
 case "DEL_APP_USER":        return {...prev, appUsers:(prev.appUsers||[]).filter(u=>u.repId!==payload)};
 case "ADD_SEQUENCE":        return {...prev, sequences:[payload,...(prev.sequences||[])]};
 case "UPDATE_SEQUENCE":     return {...prev, sequences:(prev.sequences||[]).map(s=>s.id===payload.id?{...s,...payload}:s)};
@@ -968,7 +1145,7 @@ const zs=v=>typeof v==="string"?v:v?.name||v?.display_value||"";
 const syncInvoices=async()=>{
 if(s.invoiceLastSync&&Date.now()-s.invoiceLastSync<SIX_H) return;
 try {
-const res=await fetch("/api/zoho",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({service:"books",endpoint:"/invoices?per_page=200&sort_column=date&sort_order=D",method:"GET"})}).then(r=>r.json());
+const res=await fetch("/api/zoho",{method:"POST",headers:{"Content-Type":"application/json",...internalAuthHeaders()},body:JSON.stringify({service:"books",endpoint:"/invoices?per_page=200&sort_column=date&sort_order=D",method:"GET"})}).then(r=>r.json());
 const mapped=(res.invoices||[]).map(zi=>({id:"zoho_"+zi.invoice_id,zohoId:zi.invoice_id,number:zi.invoice_number||"",customer:zi.customer_name,customerId:zi.customer_id,status:STAT_MAP[zi.status]||zi.status,date:zi.date,dueDate:zi.due_date,total:zi.total||0,balance:zi.balance||0,items:(zi.line_items||[]).map(li=>({name:li.name||li.item_name||"",qty:li.quantity,rate:li.rate,total:li.item_total})),source:"zoho"}));
 if(mapped.length) dispatch("SET_INVOICES",{invoices:mapped,lastSync:Date.now()});
 } catch{}
@@ -977,7 +1154,7 @@ const fetchAllPages=async(baseEndpoint)=>{
 let all=[],page=1;
 while(true){
 const sep=baseEndpoint.includes("?")?"&":"?";
-const res=await fetch("/api/zoho",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({service:"crm",endpoint:`${baseEndpoint}${sep}per_page=200&page=${page}`,method:"GET"})}).then(r=>r.json());
+const res=await fetch("/api/zoho",{method:"POST",headers:{"Content-Type":"application/json",...internalAuthHeaders()},body:JSON.stringify({service:"crm",endpoint:`${baseEndpoint}${sep}per_page=200&page=${page}`,method:"GET"})}).then(r=>r.json());
 // Zoho returns HTTP 204 (no JSON body) for a genuinely empty module — that's
 // not an error, res.data is just legitimately absent. But an actual failure
 // (bad token, missing scope, rate limit) comes back as a 200-wrapped error
@@ -1083,8 +1260,9 @@ const localStage=DEAL_STAGES.includes(zStage)?zStage:(dealStageMap[zStage]||"Quo
 if(existingDealZohoIds.has(zd.id)){
 const local=existingDeals.find(d=>d.zohoId===zd.id);
 if(local&&local.stage!==localStage){dispatch("UPDATE_DEAL",{id:local.id,stage:localStage,zohoStage:zStage});dealsUpdated++;autoInvoiceOnClosedWon(local,local.stage,localStage,toast);}
+if(local&&!filledQuoteLines(local.quoteItems).length){const qf=quoteFieldsFromZohoRecord(zd);if(qf.quoteItems.length)dispatch("UPDATE_DEAL",{id:local.id,...qf});}
 }else if(!dealIsSuppressed({id:"zoho_d_"+zd.id,zohoId:zd.id},s)){
-dispatch("ADD_DEAL",{id:"zoho_d_"+zd.id,zohoId:zd.id,name:zs(zd.Deal_Name)||"Untitled",contact:zs(zd.Contact_Name),school:zs(zd.Account_Name),value:Number(zd.Amount)||0,stage:localStage,zohoStage:zStage,notes:zd.Description||"",followUpDate:zd.Closing_Date||"",lastTouch:now,priority:"warm",touchHistory:[],source:"zoho-crm"});
+dispatch("ADD_DEAL",{id:"zoho_d_"+zd.id,zohoId:zd.id,name:zs(zd.Deal_Name)||"Untitled",contact:zs(zd.Contact_Name),school:zs(zd.Account_Name),value:Number(zd.Amount)||0,stage:localStage,zohoStage:zStage,notes:zd.Description||"",followUpDate:zd.Closing_Date||"",lastTouch:now,priority:"warm",touchHistory:[],source:"zoho-crm",...quoteFieldsFromZohoRecord(zd)});
 dealsAdded++;
 }
 });
@@ -1114,19 +1292,35 @@ if(dealsRemoved) dispatch("REMOVE_DEALS",deadDealIds);
 // cluttering the CRM tab. Runs every sync, so this also sweeps the existing
 // backlog, not just newly-fetched records.
 const updMap=new Map(toUpdate.map(c=>[c.id,c]));
-// A zoho_c_*/zoho_l_* contact absent from a *successful* fresh pull was
-// deleted directly in Zoho — merging above only ever adds/updates, so
-// without this a deleted-in-Zoho record just sits in the local cache
-// forever (this cache is our own Postgres app_state, entirely separate
-// from Zoho — deleting there never touches it on its own).
+// A zoho_c_*/zoho_l_* contact absent from a *successful* fresh pull MIGHT be
+// deleted directly in Zoho — but a single missing pull isn't trustworthy
+// enough to act on immediately: pagination gaps, rate limiting, and a
+// Lead→Contact conversion (which changes the record's id for a cycle or
+// two) can all make a genuinely-live contact look absent for one sync
+// without it actually being gone. So the first time a contact is missing we
+// just note it (zohoMissingSince) and keep it; only once it's stayed missing
+// across a full day of syncs do we actually remove + tombstone it (via
+// REMOVE_CONTACTS below, so it also can't just come back on the next pull —
+// see contactTombstone.js).
+const CONTACT_ZOHO_GRACE_MS=24*60*60*1000;
 const liveZohoIds=new Set(allZoho.map(c=>c.id));
 const isZohoSourced=(c)=>(c.id||"").startsWith("zoho_c_")||(c.id||"").startsWith("zoho_l_");
-const survivingExisting=(s.contacts||[]).filter(c=>fetchFailed||!isZohoSourced(c)||liveZohoIds.has(c.id));
-const removedCount=(s.contacts||[]).length-survivingExisting.length;
+const toRemoveIds=[];
+const survivingExisting=(s.contacts||[]).flatMap(c=>{
+if(fetchFailed||!isZohoSourced(c)||liveZohoIds.has(c.id)){
+return [c.zohoMissingSince?{...c,zohoMissingSince:null}:c];
+}
+if(!c.zohoMissingSince) return [{...c,zohoMissingSince:now}];
+if(now-c.zohoMissingSince<CONTACT_ZOHO_GRACE_MS) return [c];
+toRemoveIds.push(c.id);
+return [];
+});
+const removedCount=toRemoveIds.length;
 const mergedExisting=survivingExisting.map(c=>updMap.has(c.id)?mergeZohoContactRow(c,updMap.get(c.id),now):{...c,zohoId:c.zohoId||zohoIdFromContact(c)});
 const fullContactSet=[...toAdd,...mergedExisting];
 const allDealsForPhase=[...existingDeals,...dealRows.map(zd=>({contact:zs(zd.Contact_Name),school:zs(zd.Account_Name)}))];
 const {cold,keep,discard}=splitColdContacts(fullContactSet,allDealsForPhase,s.invoices||[]);
+if(toRemoveIds.length) dispatch("REMOVE_CONTACTS",toRemoveIds);
 dispatch("SET_CONTACTS",keep);
 if(!fetchFailed) dispatch("SET_CONTACTS_LAST_SYNC",now);
 let movedToProspecting=0;
@@ -1177,6 +1371,8 @@ const NAV = useMemo(()=>[
 {id:"expansion",   icon:"◉", label:"Expansion Playbook"},
 {id:"_s_finance"},
 {id:"finance",     icon:"⬡", label:"Finance"},
+{id:"team-store-statement", icon:"⬢", label:"TS Settlement Statement"},
+{id:"team-store-reconcile", icon:"⬡", label:"TS Reconciliation"},
 {id:"_s_system"},
 {id:"activity",      icon:"≡", label:"Activity"},
 {id:"settings",      icon:"⚙", label:"Settings"},
@@ -1439,6 +1635,8 @@ animation:syncing?"pulse 1s infinite":undefined}}/>
 {/* ── Inline tools (formerly separate pages) ── */}
 {mod==="integrations"&&<Suspense fallback={<PanelLoader/>}><IntegrationsPage/></Suspense>}
 {mod==="finance"     && <ModFinance/>}
+{mod==="team-store-statement" &&<Suspense fallback={<PanelLoader/>}><TeamStoreStatementPage s={s} dispatch={dispatch} toast={toast} cu={cu} setMod={setMod}/></Suspense>}
+{mod==="team-store-reconcile" &&<Suspense fallback={<PanelLoader/>}><TeamStoreReconcilePage s={s} dispatch={dispatch} toast={toast} cu={cu} setMod={setMod}/></Suspense>}
 {mod==="reddit"      &&<Suspense fallback={<PanelLoader/>}><RedditPage/></Suspense>}
 {mod==="price-lists" &&<ModPriceLists/>}
 {mod==="edgar"       &&<ModEdgar/>}
@@ -1507,24 +1705,66 @@ return(
 );
 }
 function Login({dispatch, reps=[], appUsers=[]}) {
+const [mode,setMode]=useState("email"); // "email" (default) or "pin" (fallback)
 const [sel,setSel]=useState(null);
 const [pin,setPin]=useState("");
 const [shake,setShake]=useState(false);
 const [loading,setLoading]=useState(false);
+// ── Email-code login ──────────────────────────────────────────────────────
+const [email,setEmail]=useState("");
+const [code,setCode]=useState("");
+const [codeSent,setCodeSent]=useState(false);
+const [emailBusy,setEmailBusy]=useState(false);
+const [emailError,setEmailError]=useState("");
+const sendCode=async()=>{
+const e=email.trim().toLowerCase();
+if(!/^[a-z0-9._%+-]+@st1sports\.com$/.test(e)){setEmailError("Enter your @st1sports.com email address");return;}
+setEmailBusy(true);setEmailError("");
+try{
+const r=await fetch("/api/login-request-code",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({email:e})});
+const d=await r.json();
+if(d.ok) setCodeSent(true);
+else setEmailError(d.error||"Couldn't send a code — try again");
+}catch(err){setEmailError(`Send failed: ${err.message}`);}
+setEmailBusy(false);
+};
+const verifyCode=async()=>{
+if(code.trim().length<6) return;
+setEmailBusy(true);setEmailError("");
+try{
+const r=await fetch("/api/login-verify-code",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({email:email.trim().toLowerCase(),code:code.trim()})});
+const d=await r.json();
+if(d.ok){
+if(reps.some(x=>x.id===d.repId)) dispatch("UPDATE_REP",d.rep);
+else dispatch("ADD_REP",d.rep);
+dispatch("SET_APP_USER",d.appUser);
+dispatch("LOGIN",d.repId);
+}else{
+setEmailError(d.error||"Incorrect code");
+setShake(true);setTimeout(()=>setShake(false),500);
+}
+}catch(err){setEmailError(`Verify failed: ${err.message}`);}
+setEmailBusy(false);
+};
+// ── PIN login (fallback) ──────────────────────────────────────────────────
 const loginUsers = appUsers.map(au=>{
 const rep = reps.find(r=>r.id===au.repId);
 if(!rep) return null;
 const initials = (rep.name||"?").split(" ").map(w=>w[0]).join("").slice(0,2).toUpperCase();
-return { id: rep.id, name: rep.name, email: rep.email, initials, color: B.blue, pin: au.pin };
+return { id: rep.id, name: rep.name, email: rep.email, initials, color: B.blue };
 }).filter(Boolean);
 const doLogin=async()=>{
 if(!sel||pin.length<4) return;
 setLoading(true);
-const user = loginUsers.find(u=>u.id===sel.id);
-await new Promise(r=>setTimeout(r,200));
-if(user && pin===user.pin){
+try{
+const r=await fetch("/api/login",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({repId:sel.id,pin})});
+const d=await r.json();
+if(d.ok){
 dispatch("LOGIN",sel.id);
 } else {
+setPin("");setShake(true);setTimeout(()=>setShake(false),500);
+}
+}catch(e){
 setPin("");setShake(true);setTimeout(()=>setShake(false),500);
 }
 setLoading(false);
@@ -1540,6 +1780,43 @@ return (
 <div style={{fontFamily:"'Russo One',sans-serif",fontSize:19,color:B.black,letterSpacing:.3}}>ST1 RevOps</div>
 <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.orange,letterSpacing:3,marginTop:3}}>SIGN IN</div>
 </div>
+{mode==="email"?(
+<div className={shake?"shk fu":"fu"}>
+<div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:2,marginBottom:7}}>{codeSent?"ENTER YOUR CODE":"YOUR ST1 EMAIL"}</div>
+{!codeSent?(
+<>
+<input type="email" autoFocus value={email} onChange={e=>{setEmail(e.target.value);setEmailError("");}} onKeyDown={e=>e.key==="Enter"&&sendCode()}
+placeholder="you@st1sports.com"
+style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:5,padding:"10px 12px",fontSize:13,marginBottom:10,boxSizing:"border-box"}}/>
+{emailError&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.red,marginBottom:10}}>{emailError}</div>}
+<button onClick={sendCode} disabled={emailBusy}
+style={{width:"100%",background:B.orange,color:B.white,border:"none",borderRadius:6,padding:"11px",fontFamily:"'Russo One',sans-serif",fontSize:13,letterSpacing:.5,opacity:emailBusy?.6:1}}>
+{emailBusy?"SENDING…":"SEND CODE →"}
+</button>
+</>
+):(
+<>
+<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,marginBottom:10}}>Sent to {email}</div>
+<input autoFocus value={code} onChange={e=>{setCode(e.target.value.replace(/\D/g,"").slice(0,6));setEmailError("");}} onKeyDown={e=>e.key==="Enter"&&verifyCode()}
+placeholder="------" maxLength={6}
+style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:5,padding:"10px 12px",fontSize:18,letterSpacing:8,textAlign:"center",marginBottom:10,boxSizing:"border-box"}}/>
+{emailError&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.red,marginBottom:10}}>{emailError}</div>}
+<button onClick={verifyCode} disabled={code.length<6||emailBusy}
+style={{width:"100%",background:code.length===6?B.orange:B.border,color:code.length===6?B.white:B.muted,border:"none",borderRadius:6,padding:"11px",fontFamily:"'Russo One',sans-serif",fontSize:13,letterSpacing:.5,marginBottom:10}}>
+{emailBusy?"CHECKING…":"SIGN IN →"}
+</button>
+<div style={{display:"flex",justifyContent:"space-between"}}>
+<button onClick={()=>{setCodeSent(false);setCode("");setEmailError("");}} style={{background:"none",border:"none",color:B.muted,fontSize:10,fontFamily:"'Lexend',sans-serif",textDecoration:"underline",cursor:"pointer",padding:0}}>Use a different email</button>
+<button onClick={sendCode} disabled={emailBusy} style={{background:"none",border:"none",color:B.orange,fontSize:10,fontFamily:"'Lexend',sans-serif",textDecoration:"underline",cursor:"pointer",padding:0}}>Resend code</button>
+</div>
+</>
+)}
+<div style={{marginTop:16,paddingTop:14,borderTop:`1px solid ${B.border}`,textAlign:"center"}}>
+<button onClick={()=>{setMode("pin");setEmailError("");}} style={{background:"none",border:"none",color:B.muted,fontSize:10,fontFamily:"'Lexend',sans-serif",textDecoration:"underline",cursor:"pointer",padding:0}}>Trouble with email? Use a PIN instead</button>
+</div>
+</div>
+):(
+<>
 <div style={{marginBottom:14}}>
 <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:2,marginBottom:7}}>SELECT USER</div>
 {loginUsers.length===0?(
@@ -1576,6 +1853,11 @@ style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B
 style={{width:"100%",background:sel&&pin.length>=4?B.orange:B.border,color:sel&&pin.length>=4?B.white:B.muted,border:"none",borderRadius:6,padding:"11px",fontFamily:"'Russo One',sans-serif",fontSize:13,letterSpacing:.5}}>
 {loading?"CHECKING…":"SIGN IN →"}
 </button>
+<div style={{marginTop:16,paddingTop:14,borderTop:`1px solid ${B.border}`,textAlign:"center"}}>
+<button onClick={()=>setMode("email")} style={{background:"none",border:"none",color:B.muted,fontSize:10,fontFamily:"'Lexend',sans-serif",textDecoration:"underline",cursor:"pointer",padding:0}}>Use your email instead</button>
+</div>
+</>
+)}
 {/* Admin bypass — only visible when no admin accounts are set up */}
 {!appUsers.some(au=>au.isAdmin)&&(
 <div style={{marginTop:16,paddingTop:14,borderTop:`1px solid ${B.border}`,textAlign:"center"}}>
@@ -1594,6 +1876,49 @@ const PH=React.memo(function PH({title,sub,action}){return <div style={{marginBo
 const Lbl=React.memo(function Lbl({c,s={},children}){return <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:c||B.muted,letterSpacing:2.5,textTransform:"uppercase",...s}}>{children}</div>;});
 const OBtn=React.memo(function OBtn({children,onClick,disabled,sm,col,style={}}){const c=col||B.orange;return <button onClick={onClick} disabled={disabled} style={{background:disabled?B.border:c,color:disabled?B.muted:B.white,border:"none",borderRadius:5,padding:sm?"5px 11px":"8px 16px",fontSize:sm?10:11,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,letterSpacing:.4,cursor:disabled?"not-allowed":"pointer",...style}}>{children}</button>;});
 const GBtn=React.memo(function GBtn({children,onClick,style={}}){return <button onClick={onClick} style={{background:B.white,color:B.textMid,border:`1px solid ${B.borderD}`,borderRadius:5,padding:"7px 13px",fontSize:11,fontFamily:"'Lexend',sans-serif",...style}}>{children}</button>;});
+function QuoteLinesEditor({items,onChange,onSave,busy,saving}){
+  const rows=items?.length?items:[emptyQuoteLine(mkId())];
+  const patch=(idx,field,val)=>onChange(rows.map((row,i)=>i===idx?{...row,[field]:val}:row));
+  return (
+    <div style={{marginBottom:12}}>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline",marginBottom:6}}>
+        <Lbl>Quote line items</Lbl>
+        {busy&&<span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>Loading from Zoho…</span>}
+      </div>
+      <div style={{display:"grid",gridTemplateColumns:"1fr 52px 72px 68px 22px",gap:4,marginBottom:4}}>
+        {["ITEM","QTY","RATE","TOTAL",""].map(h=><div key={h} style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.muted,letterSpacing:1}}>{h}</div>)}
+      </div>
+      {rows.map((item,idx)=>(
+        <div key={item.id||idx} style={{display:"grid",gridTemplateColumns:"1fr 52px 72px 68px 22px",gap:4,marginBottom:4,alignItems:"center"}}>
+          <input value={item.name||""} onChange={e=>patch(idx,"name",e.target.value)} placeholder="Item / kit" style={{background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:3,padding:"5px 7px",fontSize:11}}/>
+          <input type="number" min="1" value={item.qty} onChange={e=>patch(idx,"qty",Number(e.target.value||1))} style={{background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:3,padding:"5px 6px",fontSize:11,textAlign:"center"}}/>
+          <input type="number" min="0" step="0.01" value={item.rate} onChange={e=>patch(idx,"rate",Number(e.target.value||0))} style={{background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:3,padding:"5px 6px",fontSize:11,textAlign:"right"}}/>
+          <div style={{fontFamily:"'Russo One',sans-serif",fontSize:11,color:B.orange,textAlign:"right"}}>{fmt$((item.qty||0)*(item.rate||0))}</div>
+          <button onClick={()=>onChange(rows.length<=1?[emptyQuoteLine(mkId())]:rows.filter((_,i)=>i!==idx))} style={{background:"none",border:"none",color:B.muted,fontSize:14,cursor:"pointer",padding:0,lineHeight:1}}>×</button>
+        </div>
+      ))}
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginTop:6,paddingTop:6,borderTop:`1px solid ${B.border}`,gap:8,flexWrap:"wrap"}}>
+        <button onClick={()=>onChange([...rows,emptyQuoteLine(mkId())])} style={{background:"none",border:`1px dashed ${B.border}`,color:B.muted,borderRadius:4,padding:"4px 10px",fontSize:10,cursor:"pointer",fontFamily:"'Lexend',sans-serif"}}>+ ADD LINE</button>
+        <div style={{display:"flex",alignItems:"center",gap:8}}>
+          <span style={{fontFamily:"'Russo One',sans-serif",fontSize:13,color:B.orange}}>{fmt$(quoteLinesTotal(rows))}</span>
+          <OBtn sm onClick={onSave} disabled={saving}>{saving?"SAVING…":"SAVE LINES"}</OBtn>
+        </div>
+      </div>
+    </div>
+  );
+}
+// One-click role chips (Athletic Director, Head Coach, ...) next to a free-text title
+// input, so a rep isn't stuck typing "Athletic Director" by hand every time. The
+// underlying field stays free text — a chip just fills it, custom titles still work.
+const RoleQuickPick=React.memo(function RoleQuickPick({value,onChange}){
+return <div style={{display:"flex",gap:4,flexWrap:"wrap",marginTop:4}}>
+{COACH_ROLES.filter(r=>r!=="Other").map(r=>{
+const active=(value||"").trim().toLowerCase()===r.toLowerCase();
+return <button key={r} type="button" onClick={()=>onChange(r)} style={{background:active?B.orange:B.white,color:active?B.white:B.muted,border:`1px solid ${active?B.orange:B.border}`,borderRadius:99,padding:"2px 8px",fontFamily:"'Lexend',sans-serif",fontSize:9,cursor:"pointer",whiteSpace:"nowrap"}}>{r}</button>;
+})}
+</div>;
+});
+const isCoachRole=(title)=>/coach/i.test(title||"");
 function ListPager({page,setPage,total,pageSize=25,noun="items",compact=false}){
 const pages=Math.max(1,Math.ceil((total||0)/pageSize));
 const safe=Math.min(Math.max(1,page),pages);
@@ -1640,370 +1965,359 @@ return <span title={`Saved to the database ${new Date(pl.dbSyncedAt).toLocaleStr
 });
 const UCh=React.memo(function UCh({uid}){const {s}=useApp();const u=(s.reps||[]).find(r=>r.id===uid);if(!u)return null;const ini=(u.name||"?").split(" ").map(w=>w[0]).join("").slice(0,2).toUpperCase();return <div style={{display:"flex",alignItems:"center",gap:4}}><div style={{width:16,height:16,borderRadius:"50%",background:B.blue,display:"flex",alignItems:"center",justifyContent:"center"}}><span style={{fontFamily:"'Russo One',sans-serif",fontSize:6,color:B.white}}>{ini}</span></div><span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{u.name.split(" ")[0]}</span></div>;});
 const Spin=React.memo(function Spin(){return <div style={{width:18,height:18,border:`2px solid ${B.border}`,borderTop:`2px solid ${B.orange}`,borderRadius:"50%",animation:"spin 1s linear infinite",flexShrink:0}}/>;});
-const KCard=React.memo(function KCard({l,v,c,sub,onClick}){return <div onClick={onClick} style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:7,padding:"12px 14px",borderTop:`2px solid ${c}`,textAlign:"center",cursor:onClick?"pointer":"default",boxShadow:"0 1px 3px rgba(0,0,0,.04)"}}><div style={{fontFamily:"'Russo One',sans-serif",fontSize:21,color:c,letterSpacing:.3}}>{v}</div><Lbl s={{marginTop:3}}>{l}</Lbl>{sub&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginTop:2}}>{sub}</div>}</div>;});
+const KCard=React.memo(function KCard({l,v,c,sub,onClick,active}){return <div onClick={onClick} role={onClick?"button":undefined} style={{background:active?`${c}14`:B.white,border:`1px solid ${active?c:B.border}`,borderRadius:7,padding:"12px 14px",borderTop:`2px solid ${c}`,textAlign:"center",cursor:onClick?"pointer":"default",boxShadow:active?`0 0 0 1px ${c}55`:"0 1px 3px rgba(0,0,0,.04)"}}><div style={{fontFamily:"'Russo One',sans-serif",fontSize:21,color:c,letterSpacing:.3}}>{v}</div><Lbl s={{marginTop:3}}>{l}</Lbl>{sub&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginTop:2}}>{sub}</div>}</div>;});
 const ORDER_STAGES = ["Order Received","Order Placed","Invoiced"];
 function ModAnalytics() {
-const {s,setMod,dispatch}=useApp();
-const openDealInCrm=(deal)=>{
-const nav=crmNavForDeal(deal,s.contacts||[]);
-if(nav){dispatch("SET_CRM_NAV",nav);setMod("crm");}
-else setMod("deals");
-};
-const [tab,setTab]=useState("overview");
-const deals=useMemo(()=>filterRealDeals(s.deals||[],s),[s.deals,s.suppressedDealIds,s.suppressedDealZohoIds]);
-const campaigns=s.campaigns||[];
-const contacts=s.contacts||[];
-const reps=s.reps||[];
-const {openDeals,won,lost,openPipeline,wonTotal,activeCampaigns,hotLeads,totalClosed,convRate,avgDeal,campaignDeals}=useMemo(()=>{
-const closedStages=["Closed Won","Closed Lost","PO Received"];
-const openDeals=deals.filter(d=>!closedStages.includes(d.stage));
-const won=deals.filter(d=>d.stage==="Closed Won");
-const lost=deals.filter(d=>d.stage==="Closed Lost");
-const openPipeline=openDeals.reduce((a,d)=>a+(d.value||0),0);
-const wonTotal=won.reduce((a,d)=>a+(d.value||0),0);
-const activeCampaigns=campaigns.filter(c=>c.status==="active").length;
-const hotLeads=contacts.filter(c=>(c.score||0)>=40).length;
-const totalClosed=won.length+lost.length;
-const convRate=totalClosed>0?Math.round((won.length/totalClosed)*100):0;
-const avgDeal=won.length>0?Math.round(wonTotal/won.length):0;
-const campaignDeals=deals.filter(d=>d.campaignId).sort((a,b)=>(b.value||0)-(a.value||0));
-return{openDeals,won,lost,openPipeline,wonTotal,activeCampaigns,hotLeads,totalClosed,convRate,avgDeal,campaignDeals};
-},[deals,campaigns,contacts]);
-const TABS=[["overview","Overview"],["pipeline","Pipeline"],["campaigns","Campaigns"],["hotleads","Hot Leads"],["emails","Emails"]];
-return (
-<div style={{padding:"22px 26px",overflowY:"auto",height:"calc(100vh - 46px)"}}>
-<PH title="ANALYTICS" sub="Live Zoho deals and deals created here — deleted leftovers stay gone"/>
-<div style={{display:"flex",gap:5,marginBottom:18,borderBottom:`1px solid ${B.border}`}}>
-{TABS.map(([id,label])=>(
-<button key={id} onClick={()=>setTab(id)} style={{background:"none",border:"none",borderBottom:`2px solid ${tab===id?B.orange:"transparent"}`,color:tab===id?B.orange:B.muted,padding:"7px 14px 9px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,letterSpacing:1.5,fontWeight:700,cursor:"pointer"}}>{label}</button>
-))}
-</div>
-{tab==="overview"&&(
-<div>
-<div style={{display:"grid",gridTemplateColumns:"repeat(6,1fr)",gap:11,marginBottom:20}}>
-<KCard l="Total Won" v={fmt$K(wonTotal)} c={B.green} sub="closed won"/>
-<KCard l="Open Pipeline" v={fmt$K(openPipeline)} c={B.orange} sub={`${openDeals.length} deals`}/>
-<KCard l="Avg Deal Size" v={fmt$K(avgDeal)} c={B.yellow}/>
-<KCard l="Win Rate" v={`${convRate}%`} c={B.blue}/>
-<KCard l="Active Campaigns" v={activeCampaigns} c={B.purple}/>
-<KCard l="Hot Leads" v={hotLeads} c={B.teal} sub="score ≥ 40"/>
-</div>
-<div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:14}}>
-<div className="card" style={{padding:14}}>
-<Lbl s={{marginBottom:10}}>Recent Deals</Lbl>
-<div style={{display:"flex",flexDirection:"column",gap:7}}>
-{deals.slice().sort((a,b)=>new Date(b.createdAt||0)-new Date(a.createdAt||0)).slice(0,5).map(d=>(
-<div key={d.id} onClick={()=>openDealInCrm(d)} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"7px 0",borderBottom:`1px solid ${B.border}`,cursor:"pointer"}}>
-<div style={{flex:1,minWidth:0}}>
-<div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,fontWeight:500,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{d.name}</div>
-<div style={{marginTop:3}}><Pill v={d.stage} sc={DSC} bc={DBG}/></div>
-</div>
-<div style={{fontFamily:"'Russo One',sans-serif",fontSize:13,color:B.orange,flexShrink:0,marginLeft:9}}>{fmt$K(d.value||0)}</div>
-</div>
-))}
-{deals.length===0&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted}}>No deals yet</div>}
-</div>
-</div>
-<div className="card" style={{padding:14}}>
-<Lbl s={{marginBottom:10}}>Top Campaigns by Replies</Lbl>
-<div style={{display:"flex",flexDirection:"column",gap:7}}>
-{[...campaigns].map(camp=>{
-const enrs=camp.enrollments||[];
-return{...camp,replied:enrs.filter(e=>e.status==="replied").length,opened:enrs.filter(e=>e.openedAt).length,enrolled:enrs.length};
-}).sort((a,b)=>b.replied-a.replied).slice(0,3).map(camp=>(
-<div key={camp.id} style={{padding:"8px 0",borderBottom:`1px solid ${B.border}`}}>
-<div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,fontWeight:500,marginBottom:4}}>{camp.name}</div>
-<div style={{display:"flex",gap:10,flexWrap:"wrap"}}>
-<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted}}>ENROLLED <span style={{color:B.text}}>{camp.enrolled}</span></span>
-<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.blue}}>OPENED <span style={{color:B.text}}>{camp.opened}</span></span>
-<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.green}}>REPLIED <span style={{color:B.text}}>{camp.replied}</span></span>
-</div>
-</div>
-))}
-{campaigns.length===0&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted}}>No campaigns yet</div>}
-</div>
-</div>
-</div>
-</div>
-)}
-{tab==="campaigns"&&(
-<div style={{overflowX:"auto"}}>
-<table style={{width:"100%",borderCollapse:"collapse",fontSize:11,fontFamily:"'Lexend',sans-serif"}}>
-<thead>
-<tr style={{background:B.surface}}>
-{["NAME","CHANNELS","ENROLLED","SENT","OPENED","REPLIED","DONE","REP","DEALS"].map(h=>(
-<th key={h} style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:1.5,padding:"8px 10px",textAlign:"left",borderBottom:`1px solid ${B.border}`,whiteSpace:"nowrap"}}>{h}</th>
-))}
-</tr>
-</thead>
-<tbody>
-{campaigns.map(camp=>{
-const enrs=camp.enrollments||[];
-const enrolled=enrs.length;
-const sent=enrs.filter(e=>e.step>0||e.status==="done").length;
-const opened=enrs.filter(e=>e.openedAt).length;
-const replied=enrs.filter(e=>e.status==="replied").length;
-const done=enrs.filter(e=>e.status==="done").length;
-const sentPct=enrolled>0?Math.round(sent/enrolled*100):0;
-const rep=reps.find(r=>r.id===camp.repId);
-const campDeals=deals.filter(d=>d.campaignId===camp.id);
-const campDealVal=campDeals.reduce((a,d)=>a+(d.value||0),0);
-return(
-<tr key={camp.id} style={{borderBottom:`1px solid ${B.border}`}}>
-<td style={{padding:"9px 10px"}}>
-<div style={{fontWeight:500,color:B.text}}>{camp.name}</div>
-<div style={{fontSize:9,color:B.muted,marginTop:2}}>{camp.product||""}</div>
-<div style={{marginTop:4,height:4,background:B.border,borderRadius:2,width:80}}>
-<div style={{height:"100%",width:`${sentPct}%`,background:B.purple,borderRadius:2}}/>
-</div>
-<div style={{fontSize:8,color:B.muted,marginTop:2}}>{sentPct}% sent</div>
-</td>
-<td style={{padding:"9px 10px"}}>
-<div style={{display:"flex",gap:3,flexWrap:"wrap"}}>
-{(camp.channels||[]).map(ch=>(
-<span key={ch} style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.blue,background:B.blueBg,padding:"1px 5px",borderRadius:3}}>{ch}</span>
-))}
-{!(camp.channels||[]).length&&<span style={{color:B.muted,fontSize:9}}>—</span>}
-</div>
-</td>
-<td style={{padding:"9px 10px",color:B.text}}>{enrolled}</td>
-<td style={{padding:"9px 10px",color:B.purple,fontWeight:500}}>{sent}</td>
-<td style={{padding:"9px 10px",color:B.blue,fontWeight:500}}>{opened}</td>
-<td style={{padding:"9px 10px",color:B.green,fontWeight:500}}>{replied}</td>
-<td style={{padding:"9px 10px",color:B.muted}}>{done}</td>
-<td style={{padding:"9px 10px",color:B.muted}}>{rep?(rep.name||"").split(" ")[0]:camp.repId||"—"}</td>
-<td style={{padding:"9px 10px"}}>
-{campDeals.length>0?(
-<div>
-<div style={{fontWeight:500,color:B.orange}}>{campDeals.length}</div>
-<div style={{fontSize:9,color:B.muted}}>{fmt$K(campDealVal)}</div>
-</div>
-):<span style={{color:B.muted}}>—</span>}
-</td>
-</tr>
-);
-})}
-{campaigns.length===0&&(
-<tr><td colSpan={9} style={{padding:"32px 10px",textAlign:"center",color:B.muted}}>No campaigns yet</td></tr>
-)}
-</tbody>
-</table>
-</div>
-)}
-{tab==="pipeline"&&(
-<div style={{display:"flex",flexDirection:"column",gap:18}}>
-<div className="card" style={{padding:16}}>
-<Lbl s={{marginBottom:12}}>Pipeline by Stage</Lbl>
-{(()=>{
-const stageMap={};
-deals.forEach(d=>{
-if(!stageMap[d.stage]) stageMap[d.stage]={count:0,value:0};
-stageMap[d.stage].count++;
-stageMap[d.stage].value+=(d.value||0);
-});
-const entries=Object.entries(stageMap).sort((a,b)=>b[1].value-a[1].value);
-const maxVal=Math.max(...entries.map(e=>e[1].value),1);
-if(entries.length===0) return <div style={{color:B.muted,fontSize:11}}>No deals yet</div>;
-return entries.map(([stage,{count,value}])=>(
-<div key={stage} style={{marginBottom:10}}>
-<div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:4}}>
-<div style={{display:"flex",alignItems:"center",gap:8}}>
-<div style={{width:8,height:8,borderRadius:2,background:DSC[stage]||B.muted,flexShrink:0}}/>
-<span style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text}}>{stage}</span>
-<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted}}>{count} deal{count!==1?"s":""}</span>
-</div>
-<span style={{fontFamily:"'Russo One',sans-serif",fontSize:12,color:DSC[stage]||B.muted}}>{fmt$K(value)}</span>
-</div>
-<div style={{height:6,background:B.border,borderRadius:3}}>
-<div style={{height:"100%",width:`${Math.round(value/maxVal*100)}%`,background:DSC[stage]||B.muted,borderRadius:3}}/>
-</div>
-</div>
-));
-})()}
-</div>
-<div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:14}}>
-<div className="card" style={{padding:16}}>
-<Lbl s={{marginBottom:12}}>Pipeline by Product</Lbl>
-{(()=>{
-const prodMap={};
-deals.forEach(d=>{const p=d.product||"Other";if(!prodMap[p])prodMap[p]={count:0,value:0};prodMap[p].count++;prodMap[p].value+=(d.value||0);});
-const entries=Object.entries(prodMap).sort((a,b)=>b[1].value-a[1].value);
-if(entries.length===0) return <div style={{color:B.muted,fontSize:11}}>No deals yet</div>;
-return entries.map(([prod,{count,value}])=>(
-<div key={prod} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"6px 0",borderBottom:`1px solid ${B.border}`}}>
-<div>
-<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,fontWeight:500}}>{prod}</div>
-<div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,marginTop:1}}>{count} deal{count!==1?"s":""}</div>
-</div>
-<div style={{fontFamily:"'Russo One',sans-serif",fontSize:12,color:B.orange}}>{fmt$K(value)}</div>
-</div>
-));
-})()}
-</div>
-<div className="card" style={{padding:16}}>
-<Lbl s={{marginBottom:12}}>Pipeline by Rep</Lbl>
-{(()=>{
-const repMap={};
-deals.forEach(d=>{const rid=d.repId||d.assignee||"unassigned";if(!repMap[rid])repMap[rid]={count:0,value:0};repMap[rid].count++;repMap[rid].value+=(d.value||0);});
-const entries=Object.entries(repMap).sort((a,b)=>b[1].value-a[1].value);
-if(entries.length===0) return <div style={{color:B.muted,fontSize:11}}>No deals yet</div>;
-return entries.map(([rid,{count,value}])=>{
-const u=reps.find(r=>r.id===rid);
-const avg=count>0?Math.round(value/count):0;
-return(
-<div key={rid} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"6px 0",borderBottom:`1px solid ${B.border}`}}>
-<div>
-<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,fontWeight:500}}>{u?.name||rid}</div>
-<div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,marginTop:1}}>{count} deals · avg {fmt$K(avg)}</div>
-</div>
-<div style={{fontFamily:"'Russo One',sans-serif",fontSize:12,color:B.blue}}>{fmt$K(value)}</div>
-</div>
-);
-});
-})()}
-</div>
-</div>
-<div className="card" style={{padding:16}}>
-<Lbl s={{marginBottom:10}}>Deals with Campaign Attribution</Lbl>
-{deals.filter(d=>d.campaignId).length===0?(
-<div style={{color:B.muted,fontSize:11}}>No deals with campaign attribution yet. Set SOURCE CAMPAIGN when creating a deal.</div>
-):(
-<div style={{display:"flex",flexDirection:"column",gap:7}}>
-{campaignDeals.map(d=>{
-const camp=campaigns.find(c=>c.id===d.campaignId);
-return(
-<div key={d.id} onClick={()=>openDealInCrm(d)} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"7px 0",borderBottom:`1px solid ${B.border}`,cursor:"pointer"}}>
-<div>
-<div style={{display:"flex",alignItems:"center",gap:8,marginBottom:3}}>
-<span style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,fontWeight:500}}>{d.name}</span>
-<Pill v={d.stage} sc={DSC} bc={DBG}/>
-</div>
-{camp&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.purple,background:B.purpleBg,padding:"2px 6px",borderRadius:3}}>✦ {camp.name}</span>}
-</div>
-<div style={{fontFamily:"'Russo One',sans-serif",fontSize:13,color:B.orange}}>{fmt$K(d.value||0)}</div>
-</div>
-);
-})}
-</div>
-)}
-</div>
-</div>
-)}
-{tab==="hotleads"&&(
-<div>
-{(()=>{
-const tiers=[
-{label:"READY",min:60,color:B.green,bg:B.greenBg},
-{label:"WARM",min:30,color:B.orange,bg:B.orangeBg},
-{label:"ENGAGED",min:10,color:B.blue,bg:B.blueBg},
-];
-const sorted=[...contacts].filter(c=>(c.score||0)>=10).sort((a,b)=>(b.score||0)-(a.score||0));
-if(sorted.length===0) return <div style={{color:B.muted,fontSize:12,padding:"40px 0",textAlign:"center"}}>No leads with engagement score &gt;= 10 yet</div>;
-return tiers.map(tier=>{
-const group=sorted.filter(c=>{const sc=c.score||0;if(tier.label==="READY")return sc>=60;if(tier.label==="WARM")return sc>=30&&sc<60;return sc>=10&&sc<30;});
-if(group.length===0) return null;
-return(
-<div key={tier.label} style={{marginBottom:20}}>
-<div style={{display:"flex",alignItems:"center",gap:8,marginBottom:10,padding:"6px 12px",background:tier.bg,borderRadius:5,borderLeft:`3px solid ${tier.color}`}}>
-<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:tier.color,letterSpacing:2,fontWeight:700}}>{tier.label}</span>
-<span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:tier.color}}>{group.length} contacts</span>
-</div>
-<div style={{display:"flex",flexDirection:"column",gap:7}}>
-{group.map(c=>{
-const lastAct=(c.activity||[]).reduce((best,a)=>(!best||a.ts>best.ts)?a:best,null);
-const name=c.fullName||`${c.firstName||""} ${c.lastName||""}`.trim()||"Unnamed";
-const school=typeof c.school==="string"?c.school:c.school?.name||"";
-const title=typeof c.title==="string"?c.title:c.title?.name||"";
-const sport=typeof c.sport==="string"?c.sport:c.sport?.name||"";
-const sc=c.score||0;
-const scoreColor=sc>=60?B.green:sc>=30?B.orange:B.blue;
-return(
-<div key={c.id} className="card" style={{padding:"10px 12px",borderLeft:`3px solid ${scoreColor}`}}>
-<div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
-<div style={{flex:1}}>
-<div style={{display:"flex",alignItems:"center",gap:7,marginBottom:3,flexWrap:"wrap"}}>
-<span style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,fontWeight:500}}>{name}</span>
-{sport&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.blue,background:B.blueBg,padding:"2px 5px",borderRadius:3}}>{sport}</span>}
-</div>
-<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginBottom:6}}>{title}{title&&school?" · ":""}{school}{c.state?` · ${c.state}`:""}</div>
-<div style={{display:"flex",alignItems:"center",gap:8,marginBottom:6}}>
-<div style={{flex:1,height:5,background:B.border,borderRadius:3,maxWidth:120}}>
-<div style={{height:"100%",width:`${Math.min(sc,100)}%`,background:scoreColor,borderRadius:3}}/>
-</div>
-<span style={{fontFamily:"'Russo One',sans-serif",fontSize:11,color:scoreColor}}>{sc} pts</span>
-</div>
-{lastAct&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted,marginBottom:6}}>Last: {lastAct.note} · {new Date(lastAct.ts).toLocaleDateString("en-US",{month:"short",day:"numeric"})}</div>}
-</div>
-<div style={{display:"flex",flexDirection:"column",gap:5,flexShrink:0,marginLeft:10}}>
-<OBtn sm col={B.green} onClick={()=>{dispatch("SET_CRM_NAV",{id:c.id,tab:"deal"});setMod("crm");}}>DEAL +</OBtn>
-</div>
-</div>
-</div>
-);
-})}
-</div>
-</div>
-);
-});
-})()}
-</div>
-)}
-{tab==="emails"&&(
-<div>
-{(()=>{
-const allActivity=contacts.flatMap(c=>c.activity||[]);
-const totalSent=allActivity.filter(a=>a.type==="sent").length;
-const totalOpened=allActivity.filter(a=>a.type==="opened").length;
-const totalReplied=allActivity.filter(a=>a.type==="replied").length;
-const openRate=totalSent>0?Math.round(totalOpened/totalSent*100):0;
-const replyRate=totalSent>0?Math.round(totalReplied/totalSent*100):0;
-return(
-<div>
-<div style={{display:"grid",gridTemplateColumns:"repeat(5,1fr)",gap:11,marginBottom:20}}>
-<KCard l="Total Sent" v={totalSent} c={B.purple}/>
-<KCard l="Total Opened" v={totalOpened} c={B.blue}/>
-<KCard l="Total Replied" v={totalReplied} c={B.green}/>
-<KCard l="Open Rate" v={`${openRate}%`} c={B.teal}/>
-<KCard l="Reply Rate" v={`${replyRate}%`} c={B.orange}/>
-</div>
-<div className="card" style={{padding:14}}>
-<Lbl s={{marginBottom:10}}>Campaigns with Email Channel — by Reply Rate</Lbl>
-<table style={{width:"100%",borderCollapse:"collapse",fontSize:11,fontFamily:"'Lexend',sans-serif"}}>
-<thead>
-<tr style={{background:B.surface}}>
-{["CAMPAIGN","ENROLLED","SENT","OPEN RATE","REPLY RATE"].map(h=>(
-<th key={h} style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:1.5,padding:"7px 10px",textAlign:"left",borderBottom:`1px solid ${B.border}`}}>{h}</th>
-))}
-</tr>
-</thead>
-<tbody>
-{[...campaigns].filter(camp=>(camp.channels||[]).some(ch=>ch.includes("email"))||(camp.touches||[]).length>0).map(camp=>{
-const enrs=camp.enrollments||[];
-const enrolled=enrs.length;
-const sent=enrs.filter(e=>e.step>0||e.status==="done").length;
-const opened=enrs.filter(e=>e.openedAt).length;
-const replied=enrs.filter(e=>e.status==="replied").length;
-return{...camp,enrolled,sent,openR:sent>0?Math.round(opened/sent*100):0,replyR:sent>0?Math.round(replied/sent*100):0};
-}).sort((a,b)=>b.replyR-a.replyR).map(camp=>(
-<tr key={camp.id} style={{borderBottom:`1px solid ${B.border}`}}>
-<td style={{padding:"8px 10px",fontWeight:500,color:B.text}}>{camp.name}</td>
-<td style={{padding:"8px 10px",color:B.muted}}>{camp.enrolled}</td>
-<td style={{padding:"8px 10px",color:B.purple,fontWeight:500}}>{camp.sent}</td>
-<td style={{padding:"8px 10px",color:B.blue,fontWeight:500}}>{camp.openR}%</td>
-<td style={{padding:"8px 10px",color:B.green,fontWeight:500}}>{camp.replyR}%</td>
-</tr>
-))}
-{campaigns.length===0&&<tr><td colSpan={5} style={{padding:"24px 10px",textAlign:"center",color:B.muted}}>No campaigns yet</td></tr>}
-</tbody>
-</table>
-</div>
-</div>
-);
-})()}
-</div>
-)}
-</div>
-);
+  const {s,setMod,dispatch,toast,cu}=useApp();
+  const [dealModalId,setDealModalId]=useState(null);
+  const [valueDraft,setValueDraft]=useState("");
+  const [lineDraft,setLineDraft]=useState([]);
+  const [linesBusy,setLinesBusy]=useState(false);
+  const [linesSaving,setLinesSaving]=useState(false);
+  const openAccountInCrm=(name)=>{
+    if(!name) return;
+    dispatch("SET_CRM_NAV",{school:name});
+    setMod("crm");
+  };
+  const [tab,setTab]=useState("story");
+  const [stageFilter,setStageFilter]=useState("");
+  const [q,setQ]=useState("");
+  const [page,setPage]=useState(1);
+  const deals=useMemo(()=>filterRealDeals(s.deals||[],s),[s.deals,s.suppressedDealIds,s.suppressedDealZohoIds]);
+  const liveDeal=useMemo(
+    ()=>liveDealFromList(deals,dealModalId)||liveDealFromList(s.deals,dealModalId),
+    [deals,s.deals,dealModalId]
+  );
+  const openDealModal=(d,e)=>{
+    e?.preventDefault?.();
+    e?.stopPropagation?.();
+    const id=d?.id||d?.zohoId;
+    if(!id) return;
+    setDealModalId(id);
+  };
+  useEffect(()=>{
+    if(liveDeal) setValueDraft(String(liveDeal.value||0));
+    else setValueDraft("");
+  },[dealModalId,liveDeal?.value]);
+  useEffect(()=>{
+    if(!dealModalId) return;
+    const onKey=e=>{if(e.key==="Escape") setDealModalId(null);};
+    window.addEventListener("keydown",onKey);
+    return ()=>window.removeEventListener("keydown",onKey);
+  },[dealModalId]);
+  useEffect(()=>{
+    if(!dealModalId){setLineDraft([]);setLinesBusy(false);return;}
+    const deal=liveDealFromList(s.deals,dealModalId);
+    const local=normalizeQuoteLines(deal?.quoteItems);
+    setLineDraft(local.length?local:[emptyQuoteLine(mkId())]);
+    const zohoId=deal?.zohoId;
+    if(!zohoId) return;
+    let cancelled=false;
+    setLinesBusy(true);
+    fetch(`/api/crm/deal-lines?dealId=${encodeURIComponent(zohoId)}`)
+      .then(r=>r.json())
+      .then(d=>{
+        if(cancelled||!d?.ok||!deal?.id) return;
+        if(d.quoteId) dispatch("UPDATE_DEAL",{id:deal.id,zohoQuoteId:d.quoteId});
+        const zohoItems=normalizeQuoteLines(d.items);
+        if(!zohoItems.length||local.length) return;
+        dispatch("UPDATE_DEAL",{id:deal.id,quoteItems:zohoItems,quoteAmount:quoteLinesTotal(zohoItems),value:deal?.value||quoteLinesTotal(zohoItems)});
+        setLineDraft(zohoItems);
+      })
+      .catch(()=>{})
+      .finally(()=>{if(!cancelled)setLinesBusy(false);});
+    return ()=>{cancelled=true;};
+  },[dealModalId]);
+  const saveDealLines=()=>{
+    if(!liveDeal) return;
+    setLinesSaving(true);
+    persistDealQuoteLines(liveDeal,lineDraft,{dispatch,toast})
+      .then(()=>{
+        const filled=filledQuoteLines(lineDraft);
+        setValueDraft(String(quoteLinesTotal(filled)));
+        setLineDraft(filled.length?filled:[emptyQuoteLine(mkId())]);
+      })
+      .finally(()=>setLinesSaving(false));
+  };
+  const setDealStage=(st)=>{
+    const patch=dealStagePatch(liveDeal,st);
+    if(!patch) return;
+    const prev=liveDeal.stage;
+    dispatch("UPDATE_DEAL",patch);
+    crmUpdate("Deals",liveDeal.zohoId,{Stage:st});
+    dispatch("LOG",{msg:`${cu?.name||"Someone"} moved ${liveDeal.name} → ${st}`});
+    toast("Stage updated","success");
+    autoInvoiceOnClosedWon(liveDeal,prev,st,toast);
+  };
+  const setDealFollowUp=(dateStr)=>{
+    if(!liveDeal) return;
+    dispatch("UPDATE_DEAL",{id:liveDeal.id,followUpDate:dateStr,lastTouch:Date.now()});
+    crmUpdate("Deals",liveDeal.zohoId,{Closing_Date:dateStr});
+  };
+  const saveDealValue=()=>{
+    if(!liveDeal) return;
+    const v=Number(valueDraft||0);
+    dispatch("UPDATE_DEAL",{id:liveDeal.id,value:v,lastTouch:Date.now()});
+    crmUpdate("Deals",liveDeal.zohoId,{Amount:v});
+    toast("Deal value updated","success");
+  };
+  const invoices=s.invoices||[];
+  const contacts=s.contacts||[];
+  const keyAccounts=useMemo(()=>buildKeyAccounts({invoices,deals,contacts}),[invoices,deals,contacts]);
+  const kpis=useMemo(()=>analyticsKpis({deals,invoices,accounts:keyAccounts}),[deals,invoices,keyAccounts]);
+  const attentionDeals=useMemo(()=>rankAttentionDeals(deals),[deals]);
+  const openDeals=useMemo(()=>rankOpenDeals(deals),[deals]);
+  const stageRows=useMemo(()=>pipelineByStage(openDeals),[openDeals]);
+  const productRows=useMemo(()=>pipelineByProduct(openDeals),[openDeals]);
+  const beats=storyBeats(kpis);
+  const accountFocus=useMemo(()=>doubleDownItems({attentionDeals:[],keyAccounts}),[keyAccounts]);
+  useEffect(()=>{setPage(1);},[tab,stageFilter,q]);
+  const setFilter=(id)=>{
+    if(id==="story"){setTab("story");setStageFilter("");return;}
+    setTab(cur=>cur===id?"story":id);
+    if(id!=="open") setStageFilter("");
+  };
+  const pickStage=(stage)=>{
+    setTab("open");
+    setStageFilter(cur=>cur===stage?"":stage);
+  };
+  const listDeals=useMemo(()=>{
+    const rows=dealsForFilter(deals,tab,{stage:stageFilter});
+    return rows.filter(d=>matchesAnalyticsQuery({...d,school:d.school||d.company||""},q)).map(d=>{
+      if(d.attention) return d;
+      const att=dealAttention(d);
+      return att?{...d,attention:att.reason,attentionKind:att.kind}:d;
+    });
+  },[deals,tab,stageFilter,q]);
+  const listAccounts=useMemo(
+    ()=>keyAccounts.filter(a=>matchesAnalyticsQuery(a,q)),
+    [keyAccounts,q]
+  );
+  const PAGE=20;
+  const attTone=(kind)=>kind==="overdue"?B.red:kind==="due"?B.orange:kind==="hold"?B.muted:B.yellow;
+  const modalAtt=liveDeal?dealAttention(liveDeal):null;
+  const dealRow=(d)=>{
+    const lineHint=quoteLinesSummary(quoteLinesForDeal(d));
+    return (
+    <div key={d.id||d.zohoId} onClick={e=>openDealModal(d,e)} style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:10,padding:"8px 0",borderBottom:`1px solid ${B.border}`,cursor:"pointer"}}>
+      <div style={{flex:1,minWidth:0}}>
+        <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,fontWeight:500,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{d.name}</div>
+        <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginTop:2,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{d.school||d.company||""}{d.contact?` · ${d.contact}`:""}</div>
+        {lineHint&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.textMid,marginTop:2,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{lineHint}</div>}
+        <div style={{display:"flex",gap:6,alignItems:"center",marginTop:4,flexWrap:"wrap"}}>
+          <Pill v={d.stage} sc={DSC} bc={DBG}/>
+          {d.attention&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:attTone(d.attentionKind),background:`${attTone(d.attentionKind)}18`,padding:"2px 6px",borderRadius:3,letterSpacing:.4}}>{d.attention.toUpperCase()}</span>}
+        </div>
+      </div>
+      <div style={{fontFamily:"'Russo One',sans-serif",fontSize:13,color:B.orange,flexShrink:0}}>{fmt$K(d.value||0)}</div>
+    </div>
+    );
+  };
+  const accountRow=(a)=>(
+    <div key={a.name} onClick={()=>openAccountInCrm(a.name)} style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:10,padding:"8px 0",borderBottom:`1px solid ${B.border}`,cursor:"pointer"}}>
+      <div style={{flex:1,minWidth:0}}>
+        <div style={{display:"flex",alignItems:"center",gap:6,flexWrap:"wrap"}}>
+          <span style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,fontWeight:500}}>{a.name}</span>
+          {a.customer
+            ? <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.green,background:B.greenBg,padding:"2px 6px",borderRadius:3}}>CUSTOMER</span>
+            : <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.orange,background:B.orangeBg,padding:"2px 6px",borderRadius:3}}>IN PLAY</span>}
+        </div>
+        <div style={{display:"flex",gap:10,flexWrap:"wrap",marginTop:4}}>
+          {a.customer&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted}}>INVOICED <span style={{color:B.text}}>{fmt$K(a.invoiced)}</span></span>}
+          {a.owed>0&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.red}}>OWED <span style={{color:B.red}}>{fmt$K(a.owed)}</span></span>}
+          {a.pipeline>0&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.orange}}>PIPELINE <span style={{color:B.text}}>{fmt$K(a.pipeline)}</span></span>}
+        </div>
+      </div>
+      <div style={{fontFamily:"'Russo One',sans-serif",fontSize:13,color:a.owed>0?B.red:B.orange,flexShrink:0}}>{fmt$K(a.owed>0?a.owed:a.pipeline||a.invoiced)}</div>
+    </div>
+  );
+  const empty=(msg)=><div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,padding:"18px 0",textAlign:"center"}}>{msg}</div>;
+  const paged=(rows)=>rows.slice((page-1)*PAGE,page*PAGE);
+  return (
+    <div style={{padding:"22px 26px",overflowY:"auto",height:"calc(100vh - 46px)"}}>
+      <PH title="ANALYTICS" sub="How we're doing and where to double down — click a number to filter"/>
+      <div style={{display:"flex",gap:5,marginBottom:18,borderBottom:`1px solid ${B.border}`,flexWrap:"wrap"}}>
+        {ANALYTICS_TABS.map(([id,label])=>(
+          <button key={id} onClick={()=>setFilter(id)} style={{background:"none",border:"none",borderBottom:`2px solid ${tab===id?B.orange:"transparent"}`,color:tab===id?B.orange:B.muted,padding:"7px 14px 9px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,letterSpacing:1.5,fontWeight:700,cursor:"pointer",whiteSpace:"nowrap"}}>{label}</button>
+        ))}
+      </div>
+      <div className="rv-kpi-grid" style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(140px,1fr))",gap:11,marginBottom:20}}>
+        <KCard l="Total Won" v={fmt$K(kpis.wonTotal)} c={B.green} sub={`${kpis.wonCount} closed won`} onClick={()=>setFilter("won")} active={tab==="won"}/>
+        <KCard l="Open Pipeline" v={fmt$K(kpis.openPipeline)} c={B.orange} sub={`${kpis.openCount} open deal${kpis.openCount===1?"":"s"}`} onClick={()=>setFilter("open")} active={tab==="open"}/>
+        <KCard l="Needs Attention" v={kpis.attentionCount} c={kpis.attentionCount?B.red:B.muted} sub={kpis.attentionCount?"follow-up now":"pipeline is current"} onClick={()=>setFilter("attention")} active={tab==="attention"}/>
+        <KCard l="Avg Deal Size" v={fmt$K(kpis.avgDeal)} c={B.yellow} sub="closed won" onClick={()=>setFilter("won")} active={false}/>
+        <KCard l="Win Rate" v={`${kpis.winRate}%`} c={B.blue} sub={`${kpis.wonCount} won / ${kpis.lostCount} lost`} onClick={()=>setFilter("won")} active={false}/>
+        <KCard l="Key Accounts" v={kpis.customerCount||kpis.keyAccountCount} c={B.teal} sub={kpis.outstanding>0?`${fmt$K(kpis.outstanding)} outstanding`: `${kpis.keyAccountCount} in play`} onClick={()=>setFilter("accounts")} active={tab==="accounts"}/>
+      </div>
+      {tab==="story"&&(
+        <div style={{display:"flex",flexDirection:"column",gap:14}}>
+          <div className="card" style={{padding:14,borderLeft:`3px solid ${B.orange}`}}>
+            <Lbl s={{marginBottom:6}}>How we're doing</Lbl>
+            <div style={{fontFamily:"'Lexend',sans-serif",fontSize:13,color:B.text,lineHeight:1.5}}>
+              {beats.openBit} · <span style={{fontFamily:"'Russo One',sans-serif",color:B.orange}}>{fmt$K(kpis.openPipeline)}</span> in pipeline · {beats.attentionBit} · {beats.customerBit}{kpis.invoicedTotal>0?` · ${fmt$K(kpis.invoicedTotal)} invoiced`:""}.
+            </div>
+          </div>
+          <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(280px,1fr))",gap:14}}>
+            <div className="card" style={{padding:14}}>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline",marginBottom:10}}>
+                <Lbl>Needs attention</Lbl>
+                {attentionDeals.length>0&&<button onClick={()=>setFilter("attention")} style={{background:"none",border:"none",color:B.orange,fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,letterSpacing:1,cursor:"pointer"}}>SEE ALL {attentionDeals.length}</button>}
+              </div>
+              {attentionDeals.slice(0,6).map(dealRow)}
+              {attentionDeals.length===0&&empty("Nothing is overdue — stay on the open pipeline.")}
+            </div>
+            <div className="card" style={{padding:14}}>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline",marginBottom:10}}>
+                <Lbl>Key accounts</Lbl>
+                {keyAccounts.length>0&&<button onClick={()=>setFilter("accounts")} style={{background:"none",border:"none",color:B.orange,fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,letterSpacing:1,cursor:"pointer"}}>SEE ALL {keyAccounts.length}</button>}
+              </div>
+              {keyAccounts.slice(0,6).map(accountRow)}
+              {keyAccounts.length===0&&empty("No invoiced customers or open-pipeline schools yet.")}
+            </div>
+          </div>
+          {accountFocus.length>0&&(
+            <div className="card" style={{padding:14}}>
+              <Lbl s={{marginBottom:10}}>Where to double down</Lbl>
+              <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,marginBottom:8}}>Outstanding invoices and existing customers with more pipeline in play.</div>
+              {accountFocus.map(item=>(
+                <div key={`dd-${item.id}`} onClick={()=>openAccountInCrm(item.name)} style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:10,padding:"8px 0",borderBottom:`1px solid ${B.border}`,cursor:"pointer"}}>
+                  <div>
+                    <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,fontWeight:500}}>{item.name}</div>
+                    <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:item.label==="outstanding"?B.red:B.orange,marginTop:3,letterSpacing:.4}}>{item.label.toUpperCase()}</div>
+                  </div>
+                  <div style={{fontFamily:"'Russo One',sans-serif",fontSize:13,color:item.label==="outstanding"?B.red:B.orange}}>{fmt$K(item.value)}</div>
+                </div>
+              ))}
+            </div>
+          )}
+          <div className="card" style={{padding:16}}>
+            <Lbl s={{marginBottom:12}}>Open pipeline by stage</Lbl>
+            {stageRows.length===0&&empty("No open deals yet")}
+            {stageRows.map(row=>{
+              const maxVal=Math.max(...stageRows.map(r=>r.value),1);
+              return (
+                <div key={row.stage} onClick={()=>pickStage(row.stage)} style={{marginBottom:10,cursor:"pointer"}}>
+                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:4}}>
+                    <div style={{display:"flex",alignItems:"center",gap:8}}>
+                      <div style={{width:8,height:8,borderRadius:2,background:DSC[row.stage]||B.muted,flexShrink:0}}/>
+                      <span style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text}}>{row.stage}</span>
+                      <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted}}>{row.count} deal{row.count!==1?"s":""}</span>
+                    </div>
+                    <span style={{fontFamily:"'Russo One',sans-serif",fontSize:12,color:DSC[row.stage]||B.muted}}>{fmt$K(row.value)}</span>
+                  </div>
+                  <div style={{height:6,background:B.border,borderRadius:3}}>
+                    <div style={{height:"100%",width:`${Math.round(row.value/maxVal*100)}%`,background:DSC[row.stage]||B.muted,borderRadius:3}}/>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+          <div className="card" style={{padding:16}}>
+            <Lbl s={{marginBottom:12}}>Open pipeline by product</Lbl>
+            {productRows.length===0&&empty("No open deals yet")}
+            {productRows.map(row=>(
+              <div key={row.product} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"6px 0",borderBottom:`1px solid ${B.border}`}}>
+                <div>
+                  <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,fontWeight:500}}>{row.product}</div>
+                  <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,marginTop:1}}>{row.count} deal{row.count!==1?"s":""}</div>
+                </div>
+                <div style={{fontFamily:"'Russo One',sans-serif",fontSize:12,color:B.orange}}>{fmt$K(row.value)}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+      {tab!=="story"&&(
+        <div>
+          <div style={{display:"flex",gap:8,alignItems:"center",marginBottom:12,flexWrap:"wrap"}}>
+            <input value={q} onChange={e=>setQ(e.target.value)} placeholder={tab==="accounts"?"Filter accounts…":"Filter deals…"} style={{flex:"1 1 220px",background:B.white,border:`1px solid ${B.border}`,borderRadius:5,padding:"7px 10px",fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text}}/>
+            {tab==="open"&&(
+              <div style={{display:"flex",gap:4,flexWrap:"wrap"}}>
+                <button onClick={()=>setStageFilter("")} style={{background:!stageFilter?B.orange:B.white,color:!stageFilter?B.white:B.muted,border:`1px solid ${!stageFilter?B.orange:B.border}`,borderRadius:99,padding:"3px 10px",fontFamily:"'Lexend',sans-serif",fontSize:10,cursor:"pointer"}}>All stages</button>
+                {DEAL_STAGES.filter(st=>openDeals.some(d=>d.stage===st)).map(st=>(
+                  <button key={st} onClick={()=>setStageFilter(cur=>cur===st?"":st)} style={{background:stageFilter===st?(DSC[st]||B.orange):B.white,color:stageFilter===st?B.white:B.muted,border:`1px solid ${stageFilter===st?(DSC[st]||B.orange):B.border}`,borderRadius:99,padding:"3px 10px",fontFamily:"'Lexend',sans-serif",fontSize:10,cursor:"pointer"}}>{st}</button>
+                ))}
+              </div>
+            )}
+          </div>
+          <div className="card" style={{padding:"6px 14px 0"}}>
+            {tab==="accounts"?(
+              <>
+                {paged(listAccounts).map(accountRow)}
+                {listAccounts.length===0&&empty(q?"No accounts match that filter.":"No key accounts yet.")}
+                <ListPager page={page} setPage={setPage} total={listAccounts.length} pageSize={PAGE} noun="accounts"/>
+              </>
+            ):(
+              <>
+                {paged(listDeals).map(dealRow)}
+                {listDeals.length===0&&empty(q?"No deals match that filter.":tab==="attention"?"Nothing needs attention.":tab==="won"?"No closed-won deals yet.":"No open deals yet.")}
+                <ListPager page={page} setPage={setPage} total={listDeals.length} pageSize={PAGE} noun="deals"/>
+              </>
+            )}
+          </div>
+        </div>
+      )}
+      {dealModalId&&liveDeal&&(
+        <div onClick={()=>setDealModalId(null)} style={{position:"fixed",inset:0,background:"rgba(0,0,0,.5)",zIndex:9000,display:"flex",alignItems:"center",justifyContent:"center",padding:20}}>
+          <div onClick={e=>e.stopPropagation()} style={{background:B.white,borderRadius:10,boxShadow:"0 24px 80px rgba(0,0,0,.25)",width:"100%",maxWidth:560,maxHeight:"90vh",overflowY:"auto",padding:"16px 18px"}}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:12,gap:10}}>
+              <div style={{minWidth:0}}>
+                <div style={{fontFamily:"'Russo One',sans-serif",fontSize:15,color:B.black}}>{liveDeal.name}</div>
+                <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,marginTop:3}}>{liveDeal.school||liveDeal.company||""}{liveDeal.contact?` · ${liveDeal.contact}`:""}</div>
+              </div>
+              <button onClick={()=>setDealModalId(null)} style={{background:"none",border:"none",color:B.muted,fontSize:16,cursor:"pointer",lineHeight:1}}>✕</button>
+            </div>
+            <div style={{display:"flex",gap:6,flexWrap:"wrap",marginBottom:12,alignItems:"center"}}>
+              <Pill v={liveDeal.stage} sc={DSC} bc={DBG}/>
+              {modalAtt&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:attTone(modalAtt.kind),background:`${attTone(modalAtt.kind)}18`,padding:"2px 6px",borderRadius:3,letterSpacing:.4}}>{modalAtt.reason.toUpperCase()}</span>}
+              {liveDeal.product&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.blue,background:B.blueBg,padding:"2px 6px",borderRadius:3}}>{liveDeal.product}</span>}
+              {liveDeal.quoteNumber&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.muted,background:B.surface,padding:"2px 6px",borderRadius:3}}>Q {liveDeal.quoteNumber}</span>}
+            </div>
+            <Lbl s={{marginBottom:5}}>Stage</Lbl>
+            <div style={{display:"flex",flexWrap:"wrap",gap:4,marginBottom:14}}>
+              {DEAL_STAGES.map(st=>(
+                <button key={st} onClick={()=>setDealStage(st)} style={{background:liveDeal.stage===st?(DSC[st]||B.orange):B.surface,color:liveDeal.stage===st?B.white:B.muted,border:`1px solid ${liveDeal.stage===st?(DSC[st]||B.orange):B.border}`,borderRadius:3,padding:"4px 8px",fontSize:9,cursor:"pointer",fontFamily:"'Lexend',sans-serif"}}>{st}</button>
+              ))}
+            </div>
+            <Lbl s={{marginBottom:3}}>Value ($)</Lbl>
+            <div style={{display:"flex",gap:6,marginBottom:12}}>
+              <input type="number" value={valueDraft} onChange={e=>setValueDraft(e.target.value)} onKeyDown={e=>e.key==="Enter"&&saveDealValue()} style={{flex:1,background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"6px 8px",fontSize:12,boxSizing:"border-box"}}/>
+              <OBtn sm onClick={saveDealValue}>SAVE</OBtn>
+            </div>
+            <Lbl s={{marginBottom:3}}>Follow-up</Lbl>
+            <div style={{display:"flex",gap:6,marginBottom:8,flexWrap:"wrap"}}>
+              <input type="date" value={liveDeal.followUpDate||""} onChange={e=>setDealFollowUp(e.target.value)} style={{flex:"1 1 140px",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"6px 8px",fontSize:12,boxSizing:"border-box"}}/>
+              <GBtn onClick={()=>setDealFollowUp(today())}>Today</GBtn>
+              <GBtn onClick={()=>setDealFollowUp(plusDaysISO(3))}>+3d</GBtn>
+              <GBtn onClick={()=>setDealFollowUp(plusDaysISO(7))}>+7d</GBtn>
+            </div>
+            <QuoteLinesEditor items={lineDraft} onChange={setLineDraft} onSave={saveDealLines} busy={linesBusy} saving={linesSaving}/>
+            <Lbl s={{marginBottom:3}}>Notes</Lbl>
+            <textarea key={liveDeal.id} defaultValue={liveDeal.notes||""} onBlur={e=>dispatch("UPDATE_DEAL",{id:liveDeal.id,notes:e.target.value})} rows={3} style={{width:"100%",boxSizing:"border-box",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"6px 8px",fontSize:12,resize:"vertical",marginBottom:14,fontFamily:"'Lexend',sans-serif"}}/>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,flexWrap:"wrap"}}>
+              <button onClick={()=>{
+                const nav=crmNavForDeal(liveDeal,s.contacts||[]);
+                if(nav){dispatch("SET_CRM_NAV",nav);setMod("crm");}
+                else setMod("crm");
+              }} style={{background:"none",border:"none",color:B.muted,fontSize:11,cursor:"pointer",fontFamily:"'Lexend',sans-serif",textDecoration:"underline",padding:0}}>Open account in CRM</button>
+              {liveDeal.hasUploadedPdf&&<button onClick={async()=>{
+                try{
+                  const r=await fetch(`/api/crm/deal-pdf?dealId=${encodeURIComponent(liveDeal.id)}`);
+                  const d=await r.json();
+                  if(!d.ok||!d.pdfBase64){toast(d.error||"PDF not on file","error");return;}
+                  const bytes=Uint8Array.from(atob(d.pdfBase64),c=>c.charCodeAt(0));
+                  const url=URL.createObjectURL(new Blob([bytes],{type:"application/pdf"}));
+                  const a=document.createElement("a");
+                  a.href=url;a.target="_blank";a.rel="noreferrer";a.download=liveDeal.quotePdfName||d.filename||"quote.pdf";
+                  a.click();
+                }catch(e){toast(`Could not open PDF: ${e.message}`,"error");}
+              }} style={{background:"none",border:"none",color:B.blue,fontSize:11,cursor:"pointer"}}>Open PDF</button>}
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
 }
 function ModHome() {
 const {s,dispatch,toast,cu,setMod}=useApp();
@@ -2109,6 +2423,17 @@ suggestions:[],ts:new Date(m.ts).getTime(),
 setHistory(msgs);
 setTimeout(()=>endRef.current?.scrollIntoView({behavior:"smooth"}),80);
 };
+// s.agentHistory is deliberately excluded from /api/state sync (session-local,
+// same as currentUserId) — a device that's never opened chat before starts
+// with an empty thread even though its ChatSession/ChatMessage rows are
+// real and already loaded into `sessions` above. Resume the most recent one
+// automatically instead of leaving the thread blank until the rep happens to
+// notice and click a session in the sidebar themselves.
+useEffect(()=>{
+if(sessionsLoading||activeSessionId||sessionIdRef.current||history.length||!sessions.length)return;
+loadSession(sessions[0]);
+// eslint-disable-next-line react-hooks/exhaustive-deps
+},[sessionsLoading,sessions]);
 const deleteSession=async(sessId,{silent}={})=>{
 if(!sessId)return;
 try{
@@ -2812,7 +3137,7 @@ const sendDone=created?.status==="SENT";
 const createDraft=async()=>{
 setInvoiceCreated(p=>({...p,[ikey+"_creating"]:true}));
 try{
-const r=await fetch("/api/agents/ledger/invoice",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"draft",crmDealId:meta.crmDealId,crmDealName:customerName,dryRun:false})});
+const r=await fetch("/api/agents/ledger/invoice",{method:"POST",headers:{"Content-Type":"application/json",...internalAuthHeaders()},body:JSON.stringify({action:"draft",crmDealId:meta.crmDealId,crmDealName:customerName,dryRun:false})});
 const d=await r.json();
 if(d.ok){setInvoiceCreated(p=>({...p,[ikey]:d}));toast(`Invoice ${d.invoiceNumber||d.zohoInvoiceId} created as draft`,"success");}
 else toast(d.error||"Draft creation failed","error");
@@ -2823,7 +3148,7 @@ const sendInvoice=async()=>{
 if(!dealInvoiceId){toast("No local invoice ID — create draft first","error");return;}
 setInvoiceCreated(p=>({...p,[ikey+"_sending"]:true}));
 try{
-const r=await fetch("/api/agents/ledger/invoice",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"confirm",dealInvoiceId})});
+const r=await fetch("/api/agents/ledger/invoice",{method:"POST",headers:{"Content-Type":"application/json",...internalAuthHeaders()},body:JSON.stringify({action:"confirm",dealInvoiceId})});
 const d=await r.json();
 if(d.ok){setInvoiceCreated(p=>({...p,[ikey]:{...created,...d}}));toast("Invoice sent to customer","success");}
 else toast(d.error||"Send failed","error");
@@ -2891,7 +3216,7 @@ const createBill=async()=>{
   if(!pdf){toast("Upload a PDF first","error");return;}
   setBillCreated(p=>({...p,[bkey+"_creating"]:true}));
   try{
-    const r=await fetch("/api/agents/ledger/vendor-bill",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"create",pdfBase64:pdf,pdfName:billPdfStore[bkey+"_name"]||"vendor-invoice.pdf",dryRun:false})});
+    const r=await fetch("/api/agents/ledger/vendor-bill",{method:"POST",headers:{"Content-Type":"application/json",...internalAuthHeaders()},body:JSON.stringify({action:"create",pdfBase64:pdf,pdfName:billPdfStore[bkey+"_name"]||"vendor-invoice.pdf",dryRun:false})});
     const d=await r.json();
     if(d.ok){setBillCreated(p=>({...p,[bkey]:d}));toast(`Bill ${d.billNumber||d.zohoBillId} created`,"success");}
     else toast(d.error||"Bill creation failed","error");
@@ -3581,6 +3906,10 @@ const wipeAndResyncContacts=async()=>{
 if(!crmSyncRef?.current){toast("Sync not ready — reload the page","error");return;}
 if(!window.confirm(`This clears all ${(s.contacts||[]).length} locally-cached contact(s) (here and in the shared database) and rebuilds the list fresh from what's actually live in Zoho right now. Use this if the count keeps reverting to an old number. Continue?`))return;
 setWipingContacts(true);
+// Not a real deletion — these contacts are still live in Zoho, this just
+// forces a clean local rebuild — so a plain SET_CONTACTS (not REMOVE_CONTACTS)
+// is correct here: tombstoning by id would permanently suppress the exact
+// zoho_c_/zoho_l_ ids syncContacts is about to legitimately re-add below.
 dispatch("SET_CONTACTS",[]);
 await crmSyncRef.current(true);
 setWipingContacts(false);
@@ -3603,19 +3932,25 @@ const rebuildDealsFromInvoices=async()=>{
 setRebuildingDeals(true);
 let preview;
 try{
-const r=await fetch("/api/crm/rebuild-deals-from-invoices",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({dryRun:true})});
+const r=await fetch("/api/crm/rebuild-deals-from-invoices",{method:"POST",headers:{"Content-Type":"application/json",...internalAuthHeaders()},body:JSON.stringify({dryRun:true})});
 preview=await r.json();
 }catch(e){toast(`Couldn't check invoices: ${e.message}`,"error");setRebuildingDeals(false);return;}
 if(!preview?.ok){toast(preview?.error||"Couldn't check invoices","error");setRebuildingDeals(false);return;}
-if(!window.confirm(`This deletes ALL ${preview.existingDeals} current Deal(s) in Zoho CRM — including any in-progress ones not yet invoiced — and creates exactly ${preview.invoicesUsable} new Deal(s), one per real invoice (${preview.invoicesSkipped} draft/void invoice(s) skipped). This cannot be undone. Continue?`))
+if(!window.confirm(`This rebuilds ${preview.existingDeals} invoice-backed Deal(s) in Zoho CRM from ${preview.invoicesUsable} real invoice(s) (${preview.invoicesSkipped} draft/void invoice(s) skipped). ${preview.dealsPreserved} other Deal(s) in Zoho (manual pipeline, uploaded quotes, etc.) are left untouched. Continue?`))
 {setRebuildingDeals(false);return;}
 try{
-const r=await fetch("/api/crm/rebuild-deals-from-invoices",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({})});
+const r=await fetch("/api/crm/rebuild-deals-from-invoices",{method:"POST",headers:{"Content-Type":"application/json",...internalAuthHeaders()},body:JSON.stringify({})});
 const d=await r.json();
 if(!d.ok){toast(d.error||"Rebuild failed","error");setRebuildingDeals(false);return;}
-dispatch("SET_DEALS",[]);
+// Not dispatch("SET_DEALS",[]) — that wiped EVERY local deal, including a
+// purely-local manual/PDF-import one that was never pushed to Zoho at all
+// (ADD_DEAL never crmCreate's these) and so could never come back from the
+// Zoho re-sync below, which only ever adds/updates/removes deals it can
+// match by zohoId. Those local-only deals were never touched server-side
+// and don't need to be — crmSyncRef's own zohoId-based reconciliation
+// already adds the newly-rebuilt ones and drops the now-deleted ones.
 if(crmSyncRef?.current)await crmSyncRef.current(true);
-toast(`Deleted ${d.dealsDeleted} old deal(s), created ${d.dealsCreated} from invoices${d.errors?.length?` · ${d.errors.length} error(s), first: ${d.errors[0]}`:""}`,d.errors?.length?"info":"success");
+toast(`Rebuilt ${d.dealsDeleted} invoice-backed deal(s) → ${d.dealsCreated} created · ${d.dealsPreserved} other deal(s) left alone${d.errors?.length?` · ${d.errors.length} error(s), first: ${d.errors[0]}`:""}`,d.errors?.length?"info":"success");
 }catch(e){toast(`Rebuild error: ${e.message}`,"error");}
 setRebuildingDeals(false);
 };
@@ -3640,7 +3975,17 @@ const [overviewEditDealId,setOverviewEditDealId]=useState(null);
 const [overviewEditValue,setOverviewEditValue]=useState("");
 const [quoteItems,setQuoteItems]=useState([]);
 const [showAddContact,setShowAddContact]=useState(false);
-const [addForm,setAddForm]=useState({firstName:"",lastName:"",school:"",email:"",phone:""});
+// Set at the moment + ADD CONTACT opens, from the target account's own
+// ORG_TYPE_CONFIG — a club or business contact has no implied role the way
+// "probably coaches something" does for a school, so Title can't be optional
+// there. Stays false for the generic People-tab add, which has no specific
+// account context to check.
+const [addContactRequireTitle,setAddContactRequireTitle]=useState(false);
+const savingContactRef=useRef(false); // guards a rapid double-click firing two independent /Leads creates
+const [addForm,setAddForm]=useState({firstName:"",lastName:"",school:"",email:"",phone:"",title:"",sport:""});
+const [showAddAccount,setShowAddAccount]=useState(false);
+const [accountTab,setAccountTab]=useState("overview");
+const [addAccountForm,setAddAccountForm]=useState({name:"",domain:"",orgType:"school"});
 const [leftMode,setLeftMode]=useState(()=>new URLSearchParams(window.location.search).get("c")?"contacts":"accounts");
 const [selSchool,setSelSchool]=useState(()=>new URLSearchParams(window.location.search).get("school"));
 const [crmPage,setCrmPage]=useState(1);
@@ -3665,10 +4010,70 @@ const [booksContactsByCustomer,setBooksContactsByCustomer]=useState({});
 const [loadingBooksContacts,setLoadingBooksContacts]=useState(null);
 const [enrichingWebsite,setEnrichingWebsite]=useState(false);
 const [showAccountDeal,setShowAccountDeal]=useState(false);
+const [accountDealModal,setAccountDealModal]=useState(null);
+const [acctLinesBusy,setAcctLinesBusy]=useState(false);
+const [acctLinesSaving,setAcctLinesSaving]=useState(false);
+const openAccountDeal=d=>{
+  const local=quoteLinesForDeal(d);
+  setAccountDealModal({...d,quoteItems:local.length?local:[emptyQuoteLine(mkId())]});
+  setAcctLinesBusy(!!(d.zohoId&&!local.length));
+  if(!d.zohoId||local.length) return;
+  fetch(`/api/crm/deal-lines?dealId=${encodeURIComponent(d.zohoId)}`)
+    .then(r=>r.json())
+    .then(res=>{
+      if(!res?.ok) return;
+      const zohoItems=normalizeQuoteLines(res.items);
+      if(res.quoteId) dispatch("UPDATE_DEAL",{id:d.id,zohoQuoteId:res.quoteId});
+      if(!zohoItems.length) return;
+      dispatch("UPDATE_DEAL",{id:d.id,quoteItems:zohoItems,quoteAmount:quoteLinesTotal(zohoItems)});
+      setAccountDealModal(m=>m&&m.id===d.id?{...m,quoteItems:zohoItems,zohoQuoteId:res.quoteId||m.zohoQuoteId}:m);
+    })
+    .catch(()=>{})
+    .finally(()=>setAcctLinesBusy(false));
+};
+const saveAccountDealLines=()=>{
+  if(!accountDealModal) return;
+  setAcctLinesSaving(true);
+  persistDealQuoteLines(accountDealModal,accountDealModal.quoteItems,{dispatch,toast})
+    .then(()=>{
+      const filled=filledQuoteLines(accountDealModal.quoteItems);
+      const total=quoteLinesTotal(filled);
+      setAccountDealModal(m=>m?{...m,quoteItems:filled.length?filled:[emptyQuoteLine(mkId())],value:total,quoteAmount:total}:m);
+    })
+    .finally(()=>setAcctLinesSaving(false));
+};
 const [accountDealForm,setAccountDealForm]=useState({name:"",value:"",stage:"Quoted",product:"",contactId:"",notes:""});
 const [accountPdfBusy,setAccountPdfBusy]=useState(false);
 const [accountPdfDraft,setAccountPdfDraft]=useState(null);
 const accountPdfRef=useRef(null);
+const [editingAccountInfo,setEditingAccountInfo]=useState(false);
+const [accountInfoForm,setAccountInfoForm]=useState(null);
+const [savingAccountInfo,setSavingAccountInfo]=useState(false);
+const [storeNameQuery,setStoreNameQuery]=useState("");
+const [storeNameResults,setStoreNameResults]=useState([]);
+const [storeNameSearching,setStoreNameSearching]=useState(false);
+const storeNameSearchTimer=useRef(null);
+const [teamStoreSummary,setTeamStoreSummary]=useState(null);
+const [loadingTeamStoreSummary,setLoadingTeamStoreSummary]=useState(false);
+// Re-derives the linked store name independently of the account-detail IIFE
+// below (which only runs while that page is actually open) — this effect
+// lives at the top level since hooks can't live inside a conditionally
+// rendered IIFE, so it reads s.accounts/selSchool directly instead of
+// reusing that IIFE's local accountRecord.
+useEffect(()=>{
+const acct=(s.accounts||[]).find(a=>accountBelongsToSchoolKey(a,selSchool));
+const name=acct?.linkedStoreName||"";
+if(!name){setTeamStoreSummary(null);return;}
+let cancelled=false;
+setLoadingTeamStoreSummary(true);
+fetch(`/api/team-store/summary?storeName=${encodeURIComponent(name)}`)
+.then(r=>r.json())
+.then(d=>{if(!cancelled)setTeamStoreSummary(d?.ok?d:null);})
+.catch(()=>{if(!cancelled)setTeamStoreSummary(null);})
+.finally(()=>{if(!cancelled)setLoadingTeamStoreSummary(false);});
+return ()=>{cancelled=true;};
+// eslint-disable-next-line react-hooks/exhaustive-deps
+},[selSchool,s.accounts]);
 const [smsHistory,setSmsHistory]=useState([]);
 const [smsLoading,setSmsLoading]=useState(false);
 const [smsBody,setSmsBody]=useState("");
@@ -3863,7 +4268,14 @@ setSelId(id);setCrmTab(tab==="quote"?"deal":(tab||"overview"));
 if(school){setLeftMode("accounts");setSelSchool(school);}
 else setLeftMode("contacts");
 }
-else if(school){setLeftMode("accounts");setSelSchool(school);setSelId(null);if(tab)setCrmTab(tab==="quote"?"deal":tab);}
+else if(school){
+// Landing on the account page itself (no contact id) — that page switches
+// sections via its own accountTab state, not crmTab (which only the
+// contact-detail page reads), so a 'deal'/'quote' hint has to map onto
+// accountTab's "deals" tab or it silently lands on Overview instead.
+setLeftMode("accounts");setSelSchool(school);setSelId(null);
+if(tab)setAccountTab(tab==="quote"||tab==="deal"?"deals":tab);
+}
 dispatch("SET_CRM_NAV",null);
 },[s.crmNav]);
 useEffect(()=>{
@@ -3885,7 +4297,7 @@ const current=`${location.pathname}${location.search}`;
 if(current!==dest) navigate(dest, {replace:!selId && !selSchool});
 },[selId, selSchool, leftMode]);
 useEffect(()=>{ setCrmPage(1); },[search, filter, leftMode]);
-useEffect(()=>{ setShowAccountDeal(false); setAccountPdfDraft(null); },[selSchool]);
+useEffect(()=>{ setShowAccountDeal(false); setAccountPdfDraft(null); setAccountTab("overview"); },[selSchool]);
 const filtered=useMemo(()=>{
 const q=search.toLowerCase();
 const po={order:0,deal:1,quote:1,lead:2};
@@ -3911,8 +4323,20 @@ setQuoteNum(activeDeal?.quoteNumber||"");
 setTtView(false);setTtContact(null);
 setDealValueInput(String(activeDeal?.value||activeDeal?.quoteAmount||0));
 setDealValueSaved(false);
-setQuoteItems(activeDeal?.quoteItems||[]);
+const localQuoteItems=normalizeQuoteLines(activeDeal?.quoteItems);
+setQuoteItems(localQuoteItems.length?localQuoteItems:parseQuoteLinesFromDescription(activeDeal?.notes||""));
 setOverviewEditDealId(null);
+const zohoId=activeDeal?.zohoId;
+if(zohoId&&!localQuoteItems.length){
+fetch(`/api/crm/deal-lines?dealId=${encodeURIComponent(zohoId)}`).then(r=>r.json()).then(d=>{
+if(!d?.ok) return;
+const zohoItems=normalizeQuoteLines(d.items);
+if(d.quoteId) dispatch("UPDATE_DEAL",{id:activeDeal.id,zohoQuoteId:d.quoteId});
+if(!zohoItems.length) return;
+setQuoteItems(zohoItems);
+dispatch("UPDATE_DEAL",{id:activeDeal.id,quoteItems:zohoItems,quoteAmount:quoteLinesTotal(zohoItems)});
+}).catch(()=>{});
+}
 const c=selId?(contacts.find(x=>x.id===selId)||null):null;
 if(c) setProfileForm({firstName:c.firstName||"",lastName:c.lastName||"",title:c.title||"",school:c.school||"",state:c.state||"",city:c.city||"",email:c.email||"",phone:c.phone||"",sport:c.sport||"",orgType:c.orgType||"school",schoolClass:c.schoolClass||"",numAthletes:String(c.numAthletes||""),numSports:String(c.numSports||""),priority:c.priority||"medium",outreachStatus:c.outreachStatus||"new"});
 setProfileDirty(false);
@@ -4073,15 +4497,21 @@ if(fromSel&&cleanSchoolName(fromSel)!=="(No School)") setSelSchool(fromSel);
 </div>
 <div style={{display:"flex",gap:4,flexShrink:0}}>
 <button onClick={()=>{
-setShowAddContact(v=>{
-const next=!v;
-if(next&&leftMode==="accounts"&&selSchool){
-const schoolName=cleanSchoolName(selSchool);
-if(schoolName&&schoolName!=="(No School)") setAddForm(f=>({...f,school:f.school||schoolName}));
+// The Accounts tab's "+ Add" always creates a new account. Adding a
+// contact to an account you're already viewing has its own dedicated
+// "+ ADD CONTACT" button inside that account's detail view (which
+// pre-fills the school for you) — this one must not also branch on
+// whatever selSchool happens to be left over from earlier navigation
+// (a chat lookup, a deal link, the URL's own ?school= param), or it
+// silently opens the wrong form depending on invisible state.
+savingContactRef.current=false;
+if(leftMode==="accounts"){
+setShowAddAccount(v=>!v);
+return;
 }
-return next;
-});
-}} style={{background:showAddContact?B.orange:B.white,color:showAddContact?B.white:B.orange,border:`1px solid ${B.orange}`,borderRadius:5,padding:"6px 8px",fontFamily:"'Lexend',sans-serif",fontSize:11,fontWeight:600,cursor:"pointer"}}>+ Add</button>
+setAddContactRequireTitle(false);
+setShowAddContact(v=>!v);
+}} style={{background:(showAddContact||showAddAccount)?B.orange:B.white,color:(showAddContact||showAddAccount)?B.white:B.orange,border:`1px solid ${B.orange}`,borderRadius:5,padding:"6px 8px",fontFamily:"'Lexend',sans-serif",fontSize:11,fontWeight:600,cursor:"pointer"}}>+ Add</button>
 <button onClick={()=>setShowCrmTools(v=>!v)} style={{background:showCrmTools?B.surface:B.white,color:B.muted,border:`1px solid ${B.border}`,borderRadius:5,padding:"6px 8px",fontFamily:"'Lexend',sans-serif",fontSize:11,cursor:"pointer"}}>Tools</button>
 </div>
 </div>
@@ -4101,7 +4531,7 @@ return next;
 <div style={{marginTop:5,display:"flex",gap:6,flexWrap:"wrap"}}>
 <button onClick={wipeAndResyncContacts} disabled={wipingContacts} title="Clears the cached contact list (here and in the shared database) and rebuilds it fresh from what's live in Zoho right now — use this if the count keeps reverting to an old number" style={{background:"none",border:`1px solid ${wipingContacts?B.border:B.red}`,color:wipingContacts?B.muted:B.red,borderRadius:3,padding:"2px 7px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,fontWeight:700,letterSpacing:.5,cursor:wipingContacts?"default":"pointer"}}>{wipingContacts?"WIPING…":"⟲ WIPE + RESYNC CONTACTS"}</button>
 <button onClick={resetAllScores} disabled={resettingScores} title="One-time cleanup after the auto-reply scoring bug — zeroes engagement score/activity for every contact, here and in the prospecting database" style={{background:"none",border:`1px solid ${resettingScores?B.border:B.red}`,color:resettingScores?B.muted:B.red,borderRadius:3,padding:"2px 7px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,fontWeight:700,letterSpacing:.5,cursor:resettingScores?"default":"pointer"}}>{resettingScores?"RESETTING…":"⟲ RESET ALL SCORES"}</button>
-<button onClick={rebuildDealsFromInvoices} disabled={rebuildingDeals} title="Deletes every Deal in Zoho CRM and recreates exactly one Deal per real (non-draft/void) Zoho Books invoice — a Deal should only exist because of a real invoice" style={{background:"none",border:`1px solid ${rebuildingDeals?B.border:B.red}`,color:rebuildingDeals?B.muted:B.red,borderRadius:3,padding:"2px 7px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,fontWeight:700,letterSpacing:.5,cursor:rebuildingDeals?"default":"pointer"}}>{rebuildingDeals?"REBUILDING…":"⟲ REBUILD DEALS FROM INVOICES"}</button>
+<button onClick={rebuildDealsFromInvoices} disabled={rebuildingDeals} title="Rebuilds only the invoice-backed Deals (one per real, sent Zoho Books invoice) — manual pipeline deals and uploaded quotes are left alone" style={{background:"none",border:`1px solid ${rebuildingDeals?B.border:B.red}`,color:rebuildingDeals?B.muted:B.red,borderRadius:3,padding:"2px 7px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,fontWeight:700,letterSpacing:.5,cursor:rebuildingDeals?"default":"pointer"}}>{rebuildingDeals?"REBUILDING…":"⟲ REBUILD DEALS FROM INVOICES"}</button>
 </div>
 )}
 {showBreakdown&&(
@@ -4205,28 +4635,113 @@ return next;
 </div>
 )}
 </div>
-{showAddContact&&(
+{showAddAccount&&(
 <div style={{padding:"10px 13px",borderBottom:`1px solid ${B.border}`,background:`${B.orange}05`}}>
+<Lbl c={B.orange} s={{marginBottom:6}}>Account</Lbl>
+<div style={{display:"grid",gridTemplateColumns:"1fr",gap:5,marginBottom:10}}>
+<input value={addAccountForm.name} onChange={e=>setAddAccountForm(f=>({...f,name:e.target.value}))} placeholder="Account name *" style={{width:"100%",boxSizing:"border-box",background:B.white,border:`1px solid ${B.border}`,borderRadius:4,padding:"5px 7px",fontSize:10,color:B.text}}/>
+<input value={addAccountForm.domain} onChange={e=>setAddAccountForm(f=>({...f,domain:e.target.value}))} placeholder="Website / URL" style={{width:"100%",boxSizing:"border-box",background:B.white,border:`1px solid ${B.border}`,borderRadius:4,padding:"5px 7px",fontSize:10,color:B.text}}/>
+<select value={addAccountForm.orgType} onChange={e=>setAddAccountForm(f=>({...f,orgType:e.target.value}))} style={{width:"100%",boxSizing:"border-box",background:B.white,border:`1px solid ${B.border}`,borderRadius:4,padding:"5px 7px",fontSize:10,color:B.text}}>
+<option value="school">School / District</option>
+<option value="college">College / University</option>
+<option value="club">Sports Club</option>
+<option value="business">Business</option>
+<option value="">Other Organization</option>
+</select>
+</div>
+<div style={{borderTop:`1px solid ${B.border}`,margin:"2px 0 10px"}}/>
+<Lbl c={B.muted} s={{marginBottom:6}}>Contact (optional)</Lbl>
+<div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:5,marginBottom:6}}>
+<input value={addForm.firstName} onChange={e=>setAddForm(f=>({...f,firstName:e.target.value}))} placeholder="First name" style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:4,padding:"5px 7px",fontSize:10,color:B.text}}/>
+<input value={addForm.lastName} onChange={e=>setAddForm(f=>({...f,lastName:e.target.value}))} placeholder="Last name" style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:4,padding:"5px 7px",fontSize:10,color:B.text}}/>
+<input value={addForm.email} onChange={e=>setAddForm(f=>({...f,email:e.target.value}))} placeholder="Email" style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:4,padding:"5px 7px",fontSize:10,color:B.text}}/>
+<input value={addForm.phone} onChange={e=>setAddForm(f=>({...f,phone:e.target.value}))} placeholder="Phone" style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:4,padding:"5px 7px",fontSize:10,color:B.text}}/>
+<div style={{gridColumn:"1/-1"}}>
+<input value={addForm.title} onChange={e=>setAddForm(f=>({...f,title:e.target.value,sport:isCoachRole(e.target.value)?f.sport:""}))} placeholder={`Title / Role (e.g. Athletic Director)${addForm.lastName&&orgTypeConfig(addAccountForm.orgType).requireContactTitle?" *":""}`} style={{width:"100%",boxSizing:"border-box",background:B.white,border:`1px solid ${addForm.lastName&&orgTypeConfig(addAccountForm.orgType).requireContactTitle&&!addForm.title.trim()?B.red:B.border}`,borderRadius:4,padding:"5px 7px",fontSize:10,color:B.text}}/>
+<RoleQuickPick value={addForm.title} onChange={r=>setAddForm(f=>({...f,title:r}))}/>
+</div>
+{isCoachRole(addForm.title)&&(
+<select value={addForm.sport} onChange={e=>setAddForm(f=>({...f,sport:e.target.value}))} style={{gridColumn:"1/-1",width:"100%",boxSizing:"border-box",background:B.white,border:`1.5px solid ${addForm.sport?B.purple:B.border}`,borderRadius:4,padding:"5px 7px",fontSize:10,color:addForm.sport?B.purple:B.muted}}>
+<option value="">— Sport (required for a coach) —</option>
+{COMMON_SPORTS.map(sp=><option key={sp}>{sp}</option>)}
+</select>
+)}
+</div>
+<div style={{display:"flex",gap:5}}>
+<OBtn sm onClick={()=>{
+if(!addAccountForm.name.trim()||savingContactRef.current) return;
+if(addForm.lastName&&isCoachRole(addForm.title)&&!addForm.sport) return;
+if(addForm.lastName&&orgTypeConfig(addAccountForm.orgType).requireContactTitle&&!addForm.title.trim()) return;
+savingContactRef.current=true;
+const a={id:mkId(),name:addAccountForm.name.trim(),domain:addAccountForm.domain.trim(),orgType:addAccountForm.orgType,createdAt:Date.now()};
+dispatch("ADD_ACCOUNT",a);
+const key=schoolKeyOf({school:a.name,state:""});
+setShowAddAccount(false);
+setAddAccountForm({name:"",domain:"",orgType:"school"});
+setSelSchool(key);
+if(addForm.lastName){
+const c={id:mkId(),firstName:addForm.firstName,lastName:addForm.lastName,fullName:`${addForm.firstName} ${addForm.lastName}`.trim(),school:a.name,accountId:a.id,email:addForm.email,phone:addForm.phone,title:addForm.title,sport:addForm.sport,ownerId:cu?.id,source:"manual",orgType:"school",importedAt:Date.now()};
+dispatch("ADD_CONTACTS",[c]);
+setSelId(c.id);
+fetch("/api/zoho",{method:"POST",headers:{"Content-Type":"application/json",...internalAuthHeaders()},body:JSON.stringify({service:"crm",endpoint:"/Leads",method:"POST",body:{data:[{First_Name:addForm.firstName,Last_Name:addForm.lastName,Email:addForm.email,Phone:addForm.phone,Company:a.name,Designation:addForm.title}]}})})
+.then(r=>r.json()).then(d=>{const zid=d?.data?.[0]?.details?.id;if(zid)dispatch("UPDATE_CONTACT",{id:c.id,zohoId:zid});}).catch(()=>{});
+toast(`${a.name} added with ${c.fullName}`,"success");
+} else {
+toast(`${a.name} added — add a contact to attach someone to it`,"success");
+}
+setAddForm({firstName:"",lastName:"",school:"",email:"",phone:"",title:"",sport:""});
+}} disabled={!addAccountForm.name.trim()||(addForm.lastName&&isCoachRole(addForm.title)&&!addForm.sport)||(addForm.lastName&&orgTypeConfig(addAccountForm.orgType).requireContactTitle&&!addForm.title.trim())}>SAVE</OBtn>
+<GBtn sm onClick={()=>{setShowAddAccount(false);setAddAccountForm({name:"",domain:"",orgType:"school"});setAddForm({firstName:"",lastName:"",school:"",email:"",phone:"",title:"",sport:""});}}>Cancel</GBtn>
+</div>
+</div>
+)}
+{showAddContact&&(
+// A modal, not inline in this left panel — opened from the account detail
+// page (the right-side panel) this used to render up here, off to the
+// side of whatever the person was actually looking at, and was easy to
+// miss entirely. A centered popup is visible regardless of which panel
+// triggered it.
+<div onClick={()=>{setShowAddContact(false);setAddForm({firstName:"",lastName:"",school:"",email:"",phone:"",title:"",sport:""});}} style={{position:"fixed",inset:0,background:"rgba(0,0,0,.5)",zIndex:9000,display:"flex",alignItems:"center",justifyContent:"center",padding:20}}>
+<div onClick={e=>e.stopPropagation()} style={{background:B.white,borderRadius:10,boxShadow:"0 24px 80px rgba(0,0,0,.25)",width:"100%",maxWidth:400,maxHeight:"90vh",overflowY:"auto",padding:"16px 18px"}}>
+<div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:10}}>
+<div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:11,letterSpacing:.5,color:B.text}}>ADD CONTACT</div>
+<button onClick={()=>{setShowAddContact(false);setAddForm({firstName:"",lastName:"",school:"",email:"",phone:"",title:"",sport:""});}} style={{background:"none",border:"none",color:B.muted,fontSize:16,cursor:"pointer"}}>✕</button>
+</div>
 <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:5,marginBottom:6}}>
 <input value={addForm.firstName} onChange={e=>setAddForm(f=>({...f,firstName:e.target.value}))} placeholder="First name" style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:4,padding:"5px 7px",fontSize:10,color:B.text}}/>
 <input value={addForm.lastName} onChange={e=>setAddForm(f=>({...f,lastName:e.target.value}))} placeholder="Last name *" style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:4,padding:"5px 7px",fontSize:10,color:B.text}}/>
 <input value={addForm.school} onChange={e=>setAddForm(f=>({...f,school:e.target.value}))} placeholder="School / Org" style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:4,padding:"5px 7px",fontSize:10,color:B.text,gridColumn:"1/-1"}}/>
 <input value={addForm.email} onChange={e=>setAddForm(f=>({...f,email:e.target.value}))} placeholder="Email" style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:4,padding:"5px 7px",fontSize:10,color:B.text}}/>
 <input value={addForm.phone} onChange={e=>setAddForm(f=>({...f,phone:e.target.value}))} placeholder="Phone" style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:4,padding:"5px 7px",fontSize:10,color:B.text}}/>
+<div style={{gridColumn:"1/-1"}}>
+<input value={addForm.title} onChange={e=>setAddForm(f=>({...f,title:e.target.value,sport:isCoachRole(e.target.value)?f.sport:""}))} placeholder={`Title / Role (e.g. Athletic Director)${addContactRequireTitle?" *":""}`} style={{width:"100%",boxSizing:"border-box",background:B.white,border:`1px solid ${addContactRequireTitle&&!addForm.title.trim()?B.red:B.border}`,borderRadius:4,padding:"5px 7px",fontSize:10,color:B.text}}/>
+<RoleQuickPick value={addForm.title} onChange={r=>setAddForm(f=>({...f,title:r}))}/>
+{addContactRequireTitle&&!addForm.title.trim()&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.red,marginTop:3}}>Title is required for this organization type.</div>}
+</div>
+{isCoachRole(addForm.title)&&(
+<select value={addForm.sport} onChange={e=>setAddForm(f=>({...f,sport:e.target.value}))} style={{gridColumn:"1/-1",width:"100%",boxSizing:"border-box",background:B.white,border:`1.5px solid ${addForm.sport?B.purple:B.border}`,borderRadius:4,padding:"5px 7px",fontSize:10,color:addForm.sport?B.purple:B.muted}}>
+<option value="">— Sport (required for a coach) —</option>
+{COMMON_SPORTS.map(sp=><option key={sp}>{sp}</option>)}
+</select>
+)}
 </div>
 <div style={{display:"flex",gap:5}}>
 <OBtn sm onClick={()=>{
-if(!addForm.lastName) return;
-const c={id:mkId(),firstName:addForm.firstName,lastName:addForm.lastName,fullName:`${addForm.firstName} ${addForm.lastName}`.trim(),school:addForm.school,email:addForm.email,phone:addForm.phone,ownerId:cu?.id,source:"manual",orgType:"school",importedAt:Date.now()};
+if(!addForm.lastName||savingContactRef.current) return;
+if(isCoachRole(addForm.title)&&!addForm.sport) return;
+if(addContactRequireTitle&&!addForm.title.trim()) return;
+savingContactRef.current=true;
+const c={id:mkId(),firstName:addForm.firstName,lastName:addForm.lastName,fullName:`${addForm.firstName} ${addForm.lastName}`.trim(),school:addForm.school,email:addForm.email,phone:addForm.phone,title:addForm.title,sport:addForm.sport,ownerId:cu?.id,source:"manual",orgType:"school",importedAt:Date.now()};
 dispatch("ADD_CONTACTS",[c]);
 setSelId(c.id);
 setShowAddContact(false);
-setAddForm({firstName:"",lastName:"",school:"",email:"",phone:""});
+setAddForm({firstName:"",lastName:"",school:"",email:"",phone:"",title:"",sport:""});
 toast(`${c.fullName} added`,"success");
-fetch("/api/zoho",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({service:"crm",endpoint:"/Leads",method:"POST",body:{data:[{First_Name:addForm.firstName,Last_Name:addForm.lastName,Email:addForm.email,Phone:addForm.phone,Company:addForm.school}]}})})
+fetch("/api/zoho",{method:"POST",headers:{"Content-Type":"application/json",...internalAuthHeaders()},body:JSON.stringify({service:"crm",endpoint:"/Leads",method:"POST",body:{data:[{First_Name:addForm.firstName,Last_Name:addForm.lastName,Email:addForm.email,Phone:addForm.phone,Company:addForm.school,Designation:addForm.title}]}})})
 .then(r=>r.json()).then(d=>{const zid=d?.data?.[0]?.details?.id;if(zid)dispatch("UPDATE_CONTACT",{id:c.id,zohoId:zid});}).catch(()=>{});
-}} disabled={!addForm.lastName}>SAVE</OBtn>
-<GBtn sm onClick={()=>{setShowAddContact(false);setAddForm({firstName:"",lastName:"",school:"",email:"",phone:""});}}>Cancel</GBtn>
+}} disabled={!addForm.lastName||(isCoachRole(addForm.title)&&!addForm.sport)||(addContactRequireTitle&&!addForm.title.trim())}>SAVE</OBtn>
+<GBtn sm onClick={()=>{setShowAddContact(false);setAddForm({firstName:"",lastName:"",school:"",email:"",phone:"",title:"",sport:""});}}>Cancel</GBtn>
+</div>
 </div>
 </div>
 )}
@@ -4264,6 +4779,16 @@ const invoices=s.invoices||[];
 const fuzzyMatch=orgNamesMatch;
 const isInvoiced=(school)=>invoices.some(inv=>fuzzyMatch(school,inv.customer));
 const groups={};
+// Manually-created account shells (Settings → Accounts → +Add) exist even with
+// zero contacts yet — seed them first so an exact-name-matching contact just
+// aggregates into the same group; a near-match spelling gets folded in below
+// by mergeAccountGroups, which now carries these fields through a merge too.
+(s.accounts||[]).forEach(a=>{
+if(!a?.name) return;
+const key=schoolKeyOf({school:a.name,state:a.state});
+if(sq&&!key.toLowerCase().includes(sq)) return;
+if(!groups[key]) groups[key]={name:a.name,contacts:[],deals:[],value:0,invoiced:isInvoiced(a.name),accountId:a.id,domain:a.domain||"",orgType:a.orgType||"",city:a.city||"",state:a.state||""};
+});
 contacts.filter(c=>!c.deadStatus).forEach(c=>{
 const key=schoolKeyOf(c);
 const displayName=cleanSchoolName(key);
@@ -4327,22 +4852,55 @@ linkedContact={ttContact}
 const schoolContacts=contacts.filter(c=>contactBelongsToSchoolKey(c,selSchool));
 const coverage=computeAccountCoverage(schoolContacts);
 const hasPositiveIntent=schoolContacts.some(c=>(c.id||"").startsWith("zoho_c_")||(c.score||0)>=CONTACT_INTENT_SCORE||["replied","interested"].includes(c.outreachStatus));
+// A manually-created account (Settings → Accounts → +Add) has no contact to
+// read these from yet — fall back to its own record so Name/Type/URL show
+// up right away instead of blank, without changing anything for an account
+// that already has a contact carrying this data.
+const accountRecord=(s.accounts||[]).find(a=>accountBelongsToSchoolKey(a,selSchool))||null;
 const schoolCleanNameForDeals=schoolContacts[0]?.school||cleanSchoolName(selSchool);
-const schoolDeals=deals.filter(d=>dealBelongsToSchool(d,schoolContacts,schoolCleanNameForDeals));
+// A deal created from this page onward carries the real accountId (see
+// "+ ADD DEAL"/"SAVE DEAL FROM PDF" below) so it's tied to this account for
+// good, not re-derived by fuzzy name/contact matching every render — that
+// matching still runs as a fallback for deals that predate this.
+const schoolDeals=deals.filter(d=>dealBelongsToSchool(d,schoolContacts,schoolCleanNameForDeals,accountRecord?.id));
 const openDeals=schoolDeals.filter(d=>!["Closed Won","Closed Lost"].includes(d.stage));
 const closedWon=schoolDeals.filter(d=>d.stage==="Closed Won");
 const allDeals=schoolDeals;
 const totalOpen=openDeals.reduce((a,d)=>a+(d.value||0),0);
 const totalWon=closedWon.reduce((a,d)=>a+(d.value||0),0);
 const primaryC=schoolContacts[0]||null;
-const schoolCleanName=primaryC?.school||cleanSchoolName(selSchool);
-const schoolOrgType=primaryC?.orgType||"";
-const schoolClass=primaryC?.schoolClass||"";
-const numAthletes=primaryC?.numAthletes||"";
-const numSports=primaryC?.numSports||"";
-const state=primaryC?.state||"";
-const city=primaryC?.city||"";
-const website=primaryC?.website||"";
+const schoolCleanName=primaryC?.school||accountRecord?.name||cleanSchoolName(selSchool);
+// Account-level edits (the "ACCOUNT INFO" panel below) win once made — these
+// used to live only on the primary contact, which is fine as a read fallback
+// for accounts nobody's edited yet, but writes belong on the Account record:
+// it's an attribute of the school, not of whichever person happens to be
+// contact #1 today.
+const schoolOrgType=accountRecord?.orgType||primaryC?.orgType||"";
+// Every "does this field apply" question below reads from ORG_TYPE_CONFIG
+// instead of its own one-off check, so adding or adjusting an org type is a
+// config edit in one place, not a hunt through every section that touches it.
+const orgCfg=orgTypeConfig(schoolOrgType);
+const schoolClass=accountRecord?.schoolClass||primaryC?.schoolClass||"";
+const numAthletes=accountRecord?.numAthletes||primaryC?.numAthletes||"";
+const numSports=accountRecord?.numSports||primaryC?.numSports||"";
+// A club's "how many sports" is however many it's actually ticked off in
+// Sports Offered — not a free-typed guess the way numSports is for a
+// school running "most" sports. sportsMode drives which number is real.
+const offeredSports=accountRecord?.offeredSports||[];
+const sportsCountForDisplay=orgCfg.sportsMode==="include"?offeredSports.length:Number(numSports)||0;
+const state=accountRecord?.state||primaryC?.state||"";
+const city=accountRecord?.city||primaryC?.city||"";
+const website=primaryC?.website||accountRecord?.domain||"";
+// Most existing accounts only exist as a grouping of contacts by school
+// name — there's no Account row to tag a new deal to yet. Create one on
+// first use instead of leaving new deals to fall back on fuzzy name
+// matching forever.
+const ensureAccountRecord=()=>{
+if(accountRecord) return accountRecord.id;
+const a={id:mkId(),name:schoolCleanName,domain:website||"",orgType:schoolOrgType||"school",city,state,createdAt:Date.now()};
+dispatch("ADD_ACCOUNT",a);
+return a.id;
+};
 const renameAccount=async()=>{
 const newName=accountNameInput.trim();
 if(!newName||newName===schoolCleanName){setEditingAccountName(false);return;}
@@ -4359,6 +4917,7 @@ const isLead=(c.id||"").startsWith("zoho_l_");
 crmUpdate(isLead?"Leads":"Contacts",zid,isLead?{Company:newName}:{Account_Name:{id:d.accountId}});
 }
 });
+if(accountRecord) dispatch("UPDATE_ACCOUNT",{id:accountRecord.id,name:newName});
 setSelSchool(state?`${newName} — ${state}`:newName);
 setEditingAccountName(false);
 toast(`Renamed to ${newName}${d.accountCreated?" (new Zoho Account created)":""}`,"success");
@@ -4376,6 +4935,7 @@ if(!d.website){toast("Couldn't confidently find an official website","info");set
 // app-state pipeline as school/city/state) so it's visible to the whole
 // team on next load — not just this browser tab.
 schoolContacts.forEach(c=>dispatch("UPDATE_CONTACT",{id:c.id,website:d.website}));
+if(accountRecord) dispatch("UPDATE_ACCOUNT",{id:accountRecord.id,domain:d.website});
 try{await fetch("/api/crm/account-name",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({name:schoolCleanName,city,state,website:d.website})});}catch{}
 toast(`Found ${d.website} — saved to Zoho and shared account record`,"success");
 }catch(e){toast(`Enrich error: ${e.message}`,"error");}
@@ -4386,8 +4946,72 @@ const sponsorshipMax=primaryC?.sponsorshipMax||null;
 const sponsorshipStatus=primaryC?.sponsorshipStatus||null;
 const sponsorshipConfirmed=primaryC?.sponsorshipConfirmedAmount||null;
 const sponsorshipPaid=primaryC?.sponsorshipPaid||false;
-const hasOnlineStore=primaryC?.hasOnlineStore||false;
-const hasBoosterClub=primaryC?.hasBoosterClub||false;
+const hasOnlineStore=accountRecord?.hasOnlineStore!=null?accountRecord.hasOnlineStore:(primaryC?.hasOnlineStore||false);
+const hasBoosterClub=accountRecord?.hasBoosterClub!=null?accountRecord.hasBoosterClub:(primaryC?.hasBoosterClub||false);
+const teamStoreUrl=accountRecord?.teamStoreUrl||"";
+const linkedStoreName=accountRecord?.linkedStoreName||"";
+const startEditAccountInfo=()=>{
+setAccountInfoForm({
+schoolClass,
+city:city||"",
+state:state||"",
+orgType:schoolOrgType||"school",
+numAthletes:numAthletes?String(numAthletes):"",
+numSports:numSports?String(numSports):"",
+offeredSports,
+hasOnlineStore,
+teamStoreUrl,
+linkedStoreName,
+hasBoosterClub,
+});
+setStoreNameQuery(linkedStoreName);
+setStoreNameResults([]);
+setEditingAccountInfo(true);
+};
+// Debounced search against the synced Team Store order names (api/team-
+// store/names.js) — picking one here, instead of typing a name free-form,
+// is what makes the revenue/payable card below reliable: it queries by
+// this exact stored name, not a fuzzy match computed fresh every time.
+const searchStoreNames=(val)=>{
+setStoreNameQuery(val);
+setAccountInfoForm(f=>f&&({...f,linkedStoreName:""}));
+clearTimeout(storeNameSearchTimer.current);
+if(!val.trim()){setStoreNameResults([]);return;}
+storeNameSearchTimer.current=setTimeout(()=>{
+setStoreNameSearching(true);
+fetch(`/api/team-store/names?q=${encodeURIComponent(val)}`)
+.then(r=>r.json()).then(d=>{setStoreNameResults(d?.names||[]);setStoreNameSearching(false);})
+.catch(()=>setStoreNameSearching(false));
+},350);
+};
+const saveAccountInfo=()=>{
+setSavingAccountInfo(true);
+const id=ensureAccountRecord();
+// Wipes whatever the chosen org type doesn't carry, not just hides it
+// while editing — otherwise switching types leaves stale School Class/
+// athlete/sport/booster-club/offered-sports data sitting in the record,
+// invisible now but still there (and ready to reappear if the org type
+// ever changes back). Driven by the same ORG_TYPE_CONFIG every display
+// in this file reads, so a new/changed org type only needs editing there.
+const savedCfg=orgTypeConfig(accountInfoForm.orgType);
+dispatch("UPDATE_ACCOUNT",{
+id,
+schoolClass:savedCfg.schoolClass?(accountInfoForm.schoolClass||""):"",
+city:(accountInfoForm.city||"").trim(),
+state:(accountInfoForm.state||"").trim(),
+orgType:accountInfoForm.orgType||"school",
+numAthletes:savedCfg.athleteCount?(Number(accountInfoForm.numAthletes)||0):0,
+numSports:savedCfg.sportsMode==="exclude"?(Number(accountInfoForm.numSports)||0):0,
+offeredSports:savedCfg.sportsMode==="include"?accountInfoForm.offeredSports:[],
+hasOnlineStore:savedCfg.teamStore&&accountInfoForm.hasOnlineStore===true,
+teamStoreUrl:savedCfg.teamStore&&accountInfoForm.hasOnlineStore===true?(accountInfoForm.teamStoreUrl||"").trim():"",
+linkedStoreName:savedCfg.teamStore&&accountInfoForm.hasOnlineStore===true?(accountInfoForm.linkedStoreName||""):"",
+hasBoosterClub:savedCfg.boosterClub?(accountInfoForm.hasBoosterClub===true):false,
+});
+setEditingAccountInfo(false);
+setSavingAccountInfo(false);
+toast("Account info saved","success");
+};
 const schoolInvoices=(s.invoices||[]).filter(inv=>{
 const cust=(inv.customer||"").toLowerCase();
 return orgNamesMatch(inv.customer,schoolCleanName)||schoolContacts.some(c=>(c.fullName||"").toLowerCase()===cust||(c.school||"").toLowerCase()===cust);
@@ -4400,9 +5024,12 @@ const itemMap={};
 allItems.forEach(it=>{const k=(it.name||"").toLowerCase();if(!itemMap[k])itemMap[k]={name:it.name||"",qty:0,total:0,lastDate:""};itemMap[k].qty+=Number(it.qty||0);itemMap[k].total+=(it.total||0);if(!itemMap[k].lastDate||it.date>itemMap[k].lastDate)itemMap[k].lastDate=it.date;});
 const purchasedItems=Object.values(itemMap).sort((a,b)=>b.total-a.total);
 const schoolOrders=(s.orders||[]).filter(o=>schoolContacts.some(c=>c.id===o.contactId)||(o.school||"").toLowerCase()===schoolCleanName.toLowerCase());
+// Team Store / Booster Club used to always show up here too whenever they
+// were off — the exact same "No" the ACCOUNT INFO panel right above
+// already states, now with an EDIT button that actually does something
+// about it. Restating it a second time just below was redundant, not a
+// second insight, so those two entries were dropped from this list.
 const expandOps=[];
-if(!hasOnlineStore) expandOps.push({icon:"🛒",title:"Team Store",desc:"No online store yet — potential $35/athlete in additional annual revenue"});
-if(!hasBoosterClub) expandOps.push({icon:"🏅",title:"Booster Club",desc:"No booster program tracked — could add 15% revenue lift via fundraising"});
 if(sponsorshipMin&&!sponsorshipStatus) expandOps.push({icon:"★",title:"Sponsorship",desc:`Estimated sponsorship potential ${fmt$(sponsorshipMin)}${sponsorshipMax?` – ${fmt$(sponsorshipMax)}`:""}`});
 if(numSports&&Number(numSports)>0&&closedWon.length>0){
 const sportsWithOrders=new Set(closedWon.map(d=>d.sport||"").filter(Boolean)).size;
@@ -4421,7 +5048,7 @@ return(
 <div style={{padding:"16px 22px 12px",borderBottom:`1px solid ${B.border}`,background:B.white,flexShrink:0}}>
 <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:12,flexWrap:"wrap"}}>
 <div style={{flex:1,minWidth:0}}>
-<div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.orange,letterSpacing:2,marginBottom:3}}>{schoolOrgType==="school"?"SCHOOL / DISTRICT":schoolOrgType==="college"?"COLLEGE / UNIVERSITY":"ORGANIZATION"}</div>
+<div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.orange,letterSpacing:2,marginBottom:3}}>{orgTypeLabel(schoolOrgType).toUpperCase()}</div>
 {editingAccountName?(
 <div style={{display:"flex",gap:6,alignItems:"center"}}>
 <input autoFocus value={accountNameInput} onChange={e=>setAccountNameInput(e.target.value)} onKeyDown={e=>{if(e.key==="Enter")renameAccount();if(e.key==="Escape")setEditingAccountName(false);}} style={{fontFamily:"'Russo One',sans-serif",fontSize:16,color:B.black,border:`1px solid ${B.orange}`,borderRadius:4,padding:"3px 8px",minWidth:220}}/>
@@ -4437,12 +5064,16 @@ return(
 )}
 <div style={{display:"flex",gap:10,marginTop:5,flexWrap:"wrap",alignItems:"center"}}>
 {website&&<a href={website} target="_blank" rel="noreferrer" style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.blue}}>{website.replace(/^https?:\/\//,"")}</a>}
-{schoolClass&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.orange,background:`${B.orange}15`,padding:"2px 8px",borderRadius:3}}>{schoolClass}</span>}
+{orgCfg.schoolClass&&schoolClass&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.orange,background:`${B.orange}15`,padding:"2px 8px",borderRadius:3}}>{schoolClass}</span>}
 {(city||state)&&<span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{[city,state].filter(Boolean).join(", ")}</span>}
-{numAthletes&&<span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{numAthletes} athletes</span>}
-{numSports&&<span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{numSports} sports</span>}
-{hasOnlineStore&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.green,background:`${B.green}18`,padding:"2px 6px",borderRadius:3}}>TEAM STORE</span>}
-{hasBoosterClub&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.purple||"#7c3aed",background:"#7c3aed18",padding:"2px 6px",borderRadius:3}}>BOOSTER CLUB</span>}
+{orgCfg.athleteCount&&numAthletes&&<span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{numAthletes} athletes</span>}
+{orgCfg.sportsMode!=="none"&&sportsCountForDisplay>0&&<span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{sportsCountForDisplay} sport{sportsCountForDisplay!==1?"s":""}</span>}
+{orgCfg.teamStore&&hasOnlineStore&&(teamStoreUrl?(
+<a href={teamStoreUrl} target="_blank" rel="noreferrer" style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.green,background:`${B.green}18`,padding:"2px 6px",borderRadius:3,textDecoration:"none"}}>TEAM STORE ↗</a>
+):(
+<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.green,background:`${B.green}18`,padding:"2px 6px",borderRadius:3}}>TEAM STORE</span>
+))}
+{orgCfg.boosterClub&&hasBoosterClub&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.purple||"#7c3aed",background:"#7c3aed18",padding:"2px 6px",borderRadius:3}}>BOOSTER CLUB</span>}
 </div>
 </div>
 {/* Revenue summary */}
@@ -4472,8 +5103,8 @@ return(
 {/* Action bar */}
 <div style={{display:"flex",gap:8,marginBottom:4,paddingTop:6,flexWrap:"wrap",alignItems:"center"}}>
 <OBtn sm onClick={()=>{setTtContact(schoolContacts[0]||null);setTtView(true);}}>⤳ TALK TRACK</OBtn>
-<GBtn sm onClick={()=>{setAddForm(f=>({...f,school:schoolCleanName}));setShowAddContact(true);}}>+ ADD CONTACT</GBtn>
-<OBtn sm onClick={()=>{setAccountPdfDraft(null);setShowAccountDeal(v=>!v);setAccountDealForm({name:`${schoolCleanName} — Equipment`,value:"",stage:"Quoted",product:"",contactId:primaryC?.id||"",notes:""});}}>+ ADD DEAL</OBtn>
+<GBtn sm onClick={()=>{setAddForm(f=>({...f,school:schoolCleanName}));setAddContactRequireTitle(orgCfg.requireContactTitle);setShowAddContact(true);}}>+ ADD CONTACT</GBtn>
+<GBtn sm onClick={()=>{setAccountPdfDraft(null);setShowAccountDeal(v=>!v);setAccountDealForm({name:`${schoolCleanName} — Equipment`,value:"",stage:"Quoted",product:"",contactId:primaryC?.id||"",notes:""});}}>+ ADD DEAL</GBtn>
 <GBtn sm onClick={()=>accountPdfRef.current?.click()}>{accountPdfBusy?"READING PDF…":"UPLOAD PDF"}</GBtn>
 <input ref={accountPdfRef} type="file" accept="application/pdf" style={{display:"none"}} onChange={async e=>{
 const file=e.target.files?.[0];
@@ -4516,7 +5147,7 @@ setAccountPdfBusy(false);
 <OBtn sm onClick={()=>{
 if(!accountDealForm.name.trim()){toast("Deal name required","error");return;}
 const contact=schoolContacts.find(c=>c.id===accountDealForm.contactId);
-const d={id:mkId(),name:accountDealForm.name.trim(),school:schoolCleanName,city,state,contact:contact?cName(contact):"",contactId:contact?.id||"",value:Number(accountDealForm.value||0),stage:accountDealForm.stage||"Quoted",product:accountDealForm.product||"",notes:accountDealForm.notes||"",createdAt:today(),lastTouch:Date.now(),priority:"warm",zoho_synced:false,source:"manual"};
+const d={id:mkId(),name:accountDealForm.name.trim(),school:schoolCleanName,accountId:ensureAccountRecord(),city,state,contact:contact?cName(contact):"",contactId:contact?.id||"",value:Number(accountDealForm.value||0),stage:accountDealForm.stage||"Quoted",product:accountDealForm.product||"",notes:accountDealForm.notes||"",createdAt:today(),lastTouch:Date.now(),priority:"warm",zoho_synced:false,source:"manual"};
 dispatch("ADD_DEAL",d);
 dispatch("LOG",{msg:`${cu?.name||"Someone"} added deal on ${schoolCleanName}: ${d.name}`});
 pushDealToZoho({dealName:d.name,amount:d.value,stage:d.stage,accountName:schoolCleanName,accountCity:city,accountState:state,description:d.notes}).then(dd=>{if(dd.dealId)dispatch("UPDATE_DEAL",{id:d.id,zohoId:dd.dealId});});
@@ -4549,7 +5180,7 @@ if(!accountPdfDraft.name.trim()){toast("Deal name required","error");return;}
 const contact=schoolContacts.find(c=>c.id===accountPdfDraft.contactId);
 const items=(accountPdfDraft.lineItems||[]).map(it=>({id:mkId(),name:it.name,qty:it.qty||1,rate:it.rate||0}));
 const value=Number(accountPdfDraft.value||0);
-const d={id:mkId(),name:accountPdfDraft.name.trim(),school:schoolCleanName,city,state,contact:contact?cName(contact):"",contactId:contact?.id||"",value,stage:"Quoted",product:items[0]?.name||"",notes:accountPdfDraft.notes||`Uploaded PDF: ${accountPdfDraft.filename}`,createdAt:today(),lastTouch:Date.now(),priority:"warm",zoho_synced:false,source:"uploaded-quote",quoteNumber:accountPdfDraft.quoteNumber||"",quoteItems:items,quoteAmount:value,quotePdfName:accountPdfDraft.filename,hasUploadedPdf:true};
+const d={id:mkId(),name:accountPdfDraft.name.trim(),school:schoolCleanName,accountId:ensureAccountRecord(),city,state,contact:contact?cName(contact):"",contactId:contact?.id||"",value,stage:"Quoted",product:items[0]?.name||"",notes:accountPdfDraft.notes||`Uploaded PDF: ${accountPdfDraft.filename}`,createdAt:today(),lastTouch:Date.now(),priority:"warm",zoho_synced:false,source:"uploaded-quote",quoteNumber:accountPdfDraft.quoteNumber||"",quoteItems:items,quoteAmount:value,quotePdfName:accountPdfDraft.filename,hasUploadedPdf:true};
 dispatch("ADD_DEAL",d);
 dispatch("LOG",{msg:`${cu?.name||"Someone"} uploaded quote PDF on ${schoolCleanName}: ${d.name}`});
 try{
@@ -4565,57 +5196,195 @@ toast("Quote PDF added as a deal","success");
 </div>
 )}
 {/* ── KPI STRIP ── */}
-<div className="rv-kpi-grid" style={{display:"grid",gridTemplateColumns:"repeat(5,1fr)",gap:8,marginTop:14,marginBottom:4}}>
-<KCard l="Total Invoiced" v={fmt$K(totalInvoiced)} c={B.orange}/>
-<KCard l="Paid" v={fmt$K(totalPaid)} c={B.green}/>
-<KCard l="Outstanding" v={fmt$K(totalOwed)} c={totalOwed>0?B.red:B.muted}/>
-<KCard l="Open Deals" v={openDeals.length} c={B.blue} sub={fmt$K(totalOpen)}/>
-<KCard l="Closed Won" v={closedWon.length} c={B.green} sub={fmt$K(totalWon)}/>
+{/* auto-fit/minmax as the base, not a fixed 5-column grid — the existing
+    @media(max-width:768px) rule for .rv-kpi-grid only forces 2 columns on
+    true mobile; a merely-narrow desktop window (not maximized, a smaller
+    laptop screen, browser zoom) still had nowhere to go but overflow, with
+    no scrollbar to reach it. auto-fit reflows continuously at any width in
+    between, and the mobile breakpoint below still wins via !important at
+    <768px. Each card jumps to the tab it summarizes — these numbers ARE the
+    deals/invoices, not just a readout. */}
+<div className="rv-kpi-grid" style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(140px,1fr))",gap:8,marginTop:14,marginBottom:4}}>
+<KCard l="Total Invoiced" v={fmt$K(totalInvoiced)} c={B.orange} onClick={()=>setAccountTab("invoices")}/>
+<KCard l="Paid" v={fmt$K(totalPaid)} c={B.green} onClick={()=>setAccountTab("invoices")}/>
+<KCard l="Outstanding" v={fmt$K(totalOwed)} c={totalOwed>0?B.red:B.muted} onClick={()=>setAccountTab("invoices")}/>
+<KCard l="Open Deals" v={fmt$K(totalOpen)} c={B.blue} sub={`${openDeals.length} deal${openDeals.length===1?"":"s"}`} onClick={()=>setAccountTab("deals")}/>
+<KCard l="Closed Won" v={closedWon.length} c={B.green} sub={fmt$K(totalWon)} onClick={()=>setAccountTab("deals")}/>
 </div>
-{/* ── ACCOUNT INFO ── */}
-<SectionHdr>ACCOUNT INFO</SectionHdr>
-<div className="rv-info-grid" style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:12,background:B.surface,borderRadius:6,padding:14,border:`1px solid ${B.border}`}}>
+{/* ── ACCOUNT SUB-NAV ── */}
+<div style={{display:"flex",gap:2,marginTop:14,borderBottom:`1px solid ${B.border}`,flexWrap:"wrap"}}>
 {[
-["School Class",schoolClass||"—"],
-["Location",[city,state].filter(Boolean).join(", ")||"—"],
-["Org Type",schoolOrgType||"—"],
-["# Athletes",numAthletes||"—"],
-["# Sports",numSports||"—"],
-["Team Store",hasOnlineStore?"Yes":"No"],
-["Booster Club",hasBoosterClub?"Yes":"No"],
-["Contacts",schoolContacts.length],
-["Open Deals",openDeals.length],
-].map(([k,v])=>(
-<div key={k}>
-<div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.muted,letterSpacing:1,marginBottom:2}}>{k}</div>
-<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,fontWeight:500}}>{v}</div>
-</div>
+["overview","OVERVIEW"],
+["contacts",`CONTACTS (${schoolContacts.length})`],
+["deals",`DEALS (${allDeals.length})`],
+["invoices",`INVOICES (${schoolInvoices.length})`],
+["history","HISTORY"],
+].map(([id,label])=>(
+<button key={id} onClick={()=>setAccountTab(id)} style={{background:"none",border:"none",borderBottom:`2px solid ${accountTab===id?B.orange:"transparent"}`,color:accountTab===id?B.orange:B.muted,padding:"8px 14px 9px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,letterSpacing:1,fontWeight:700,cursor:"pointer",whiteSpace:"nowrap"}}>{label}</button>
 ))}
 </div>
-{/* ── STAFF COVERAGE ── */}
-<SectionHdr sub={hasPositiveIntent&&coverage.gaps.length>0?"Positive intent on file — go fill the gaps below":undefined}>STAFF COVERAGE</SectionHdr>
-<div style={{background:B.surface,borderRadius:6,padding:14,border:`1px solid ${B.border}`}}>
-<div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10,flexWrap:"wrap",gap:8}}>
-<div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
-<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:1}}>ATHLETIC DIRECTOR</span>
-{coverage.adContact?
-<span style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.green,fontWeight:500}}>{cName(coverage.adContact)}</span>
-:<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,background:B.border,padding:"2px 7px",borderRadius:3}}>NOT ON FILE</span>}
+{accountTab==="overview"&&(<>
+{/* ── ACCOUNT INFO ── */}
+{(()=>{
+const lblS={fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.muted,letterSpacing:1,marginBottom:2};
+const valS={fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,fontWeight:500};
+const inpS={width:"100%",background:B.white,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"4px 7px",fontSize:11,fontFamily:"'Lexend',sans-serif",boxSizing:"border-box"};
+const toggle=(active)=>({flex:1,background:active?B.orange:B.white,color:active?B.white:B.muted,border:`1px solid ${active?B.orange:B.border}`,borderRadius:4,padding:"4px 10px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",cursor:"pointer"});
+// Live off the in-progress edit, not just the saved value, so picking a
+// different Org Type shows/hides fields immediately instead of only after
+// SAVE — same ORG_TYPE_CONFIG the rest of the account page reads from.
+const liveCfg=editingAccountInfo?orgTypeConfig(accountInfoForm.orgType):orgCfg;
+return(<>
+<SectionHdr sub={editingAccountInfo?(
+<div style={{display:"flex",gap:6}}>
+<button onClick={saveAccountInfo} disabled={savingAccountInfo} style={{background:B.orange,border:"none",color:B.white,borderRadius:4,padding:"4px 10px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,cursor:"pointer"}}>{savingAccountInfo?"SAVING…":"SAVE"}</button>
+<button onClick={()=>setEditingAccountInfo(false)} style={{background:"none",border:`1px solid ${B.border}`,color:B.muted,borderRadius:4,padding:"4px 10px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",cursor:"pointer"}}>CANCEL</button>
 </div>
-{coverage.gaps.length>0&&hasPositiveIntent&&(
-<OBtn sm color={B.teal} disabled={findingStaff} onClick={()=>findMissingStaff(schoolCleanName,city,state,coverage.gaps,!coverage.adContact)}>{findingStaff?"SEARCHING…":"🔎 FIND MISSING STAFF"}</OBtn>
+):(
+<button onClick={startEditAccountInfo} style={{background:"none",border:`1px solid ${B.border}`,color:B.blue,borderRadius:4,padding:"3px 9px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,letterSpacing:.3,cursor:"pointer"}} title="Edit account info">✎ EDIT</button>
+)}>ACCOUNT INFO</SectionHdr>
+<div className="rv-info-grid" style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(150px,1fr))",gap:12,background:B.surface,borderRadius:6,padding:14,border:`1px solid ${B.border}`}}>
+{liveCfg.schoolClass&&(
+<div>
+<div style={lblS}>School Class</div>
+{editingAccountInfo?(
+<select value={accountInfoForm.schoolClass} onChange={e=>setAccountInfoForm(f=>({...f,schoolClass:e.target.value}))} style={inpS}>
+<option value="">— Select —</option>
+{["1A","2A","3A","4A","5A","6A"].map(v=><option key={v}>{v}</option>)}
+</select>
+):(<div style={valS}>{schoolClass||"—"}</div>)}
+</div>
 )}
+<div>
+<div style={lblS}>Location</div>
+{editingAccountInfo?(
+<div style={{display:"flex",gap:5}}>
+<input value={accountInfoForm.city} onChange={e=>setAccountInfoForm(f=>({...f,city:e.target.value}))} placeholder="City" style={inpS}/>
+<input value={accountInfoForm.state} onChange={e=>setAccountInfoForm(f=>({...f,state:e.target.value}))} placeholder="State" style={{...inpS,width:70,flex:"0 0 70px"}}/>
 </div>
-<div style={{display:"flex",flexWrap:"wrap",gap:6}}>
+):(<div style={valS}>{[city,state].filter(Boolean).join(", ")||"—"}</div>)}
+</div>
+<div>
+<div style={lblS}>Org Type</div>
+{editingAccountInfo?(
+<select value={accountInfoForm.orgType} onChange={e=>setAccountInfoForm(f=>({...f,orgType:e.target.value}))} style={inpS}>
+<option value="school">School / District</option>
+<option value="college">College / University</option>
+<option value="club">Sports Club</option>
+<option value="business">Business</option>
+<option value="other">Other Organization</option>
+</select>
+):(<div style={valS}>{orgTypeLabel(schoolOrgType)}</div>)}
+</div>
+{liveCfg.athleteCount&&(
+<div>
+<div style={lblS}># Athletes</div>
+{editingAccountInfo?(
+<input type="number" min={0} value={accountInfoForm.numAthletes} onChange={e=>setAccountInfoForm(f=>({...f,numAthletes:e.target.value}))} style={inpS}/>
+):(<div style={valS}>{numAthletes||"—"}</div>)}
+</div>
+)}
+{liveCfg.sportsMode==="exclude"&&(
+<div>
+<div style={lblS}># Sports</div>
+{editingAccountInfo?(
+<input type="number" min={0} value={accountInfoForm.numSports} onChange={e=>setAccountInfoForm(f=>({...f,numSports:e.target.value}))} style={inpS}/>
+):(<div style={valS}>{numSports||"—"}</div>)}
+</div>
+)}
+{liveCfg.sportsMode==="include"&&(
+<div style={{gridColumn:"1/-1"}}>
+<div style={lblS}>Sports Offered{editingAccountInfo?` (${accountInfoForm.offeredSports.length} selected)`:""}</div>
+{editingAccountInfo?(
+<div style={{display:"flex",flexWrap:"wrap",gap:5}}>
 {ACCOUNT_SPORTS.map(sp=>{
-const c=coverage.covered.get(sp);
+const on=accountInfoForm.offeredSports.includes(sp);
 return(
-<span key={sp} title={c?cName(c):"Not on file"} style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,letterSpacing:.3,padding:"3px 8px",borderRadius:3,color:c?B.green:B.muted,background:c?`${B.green}15`:B.border}}>{sp}{c?" ✓":""}</span>
+<button key={sp} onClick={()=>setAccountInfoForm(f=>({...f,offeredSports:on?f.offeredSports.filter(s=>s!==sp):[...f.offeredSports,sp]}))} style={{background:on?B.orange:B.white,color:on?B.white:B.muted,border:`1px solid ${on?B.orange:B.border}`,borderRadius:4,padding:"3px 9px",fontSize:10,fontFamily:"'Lexend',sans-serif",cursor:"pointer"}}>{sp}</button>
 );
 })}
 </div>
-{coverage.gaps.length>0&&!hasPositiveIntent&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginTop:8}}>{coverage.gaps.length} sport{coverage.gaps.length!==1?"s":""} with no coach on file — search unlocks once someone here shows positive intent.</div>}
+):(<div style={valS}>{offeredSports.length?offeredSports.join(", "):"—"}</div>)}
 </div>
+)}
+{liveCfg.teamStore&&(
+<div style={editingAccountInfo&&accountInfoForm.hasOnlineStore?{gridColumn:"span 2"}:undefined}>
+<div style={lblS}>Team Store</div>
+{editingAccountInfo?(
+<div>
+<div style={{display:"flex",gap:5,marginBottom:accountInfoForm.hasOnlineStore?5:0}}>
+{["Yes","No"].map(opt=>(
+<button key={opt} onClick={()=>setAccountInfoForm(f=>({...f,hasOnlineStore:opt==="Yes"}))} style={toggle(opt==="Yes"?accountInfoForm.hasOnlineStore===true:accountInfoForm.hasOnlineStore!==true)}>{opt}</button>
+))}
+</div>
+{accountInfoForm.hasOnlineStore&&(
+<div style={{display:"flex",flexDirection:"column",gap:5}}>
+<input value={accountInfoForm.teamStoreUrl} onChange={e=>setAccountInfoForm(f=>({...f,teamStoreUrl:e.target.value}))} placeholder="https://teamstore…" style={inpS}/>
+<div style={{position:"relative"}}>
+<input value={storeNameQuery} onChange={e=>searchStoreNames(e.target.value)} placeholder="Link to a synced store (for revenue tracking)…" style={inpS}/>
+{accountInfoForm.linkedStoreName&&(
+<div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.green,marginTop:3}}>✓ Linked to "{accountInfoForm.linkedStoreName}"</div>
+)}
+{storeNameQuery&&!accountInfoForm.linkedStoreName&&(storeNameSearching||storeNameResults.length>0)&&(
+<div style={{position:"absolute",top:"100%",left:0,right:0,background:B.white,border:`1px solid ${B.border}`,borderRadius:5,boxShadow:"0 4px 12px rgba(0,0,0,.1)",zIndex:20,maxHeight:160,overflowY:"auto"}}>
+{storeNameSearching?(
+<div style={{padding:"8px 10px",fontSize:10,color:B.muted}}>Searching…</div>
+):storeNameResults.length===0?(
+<div style={{padding:"8px 10px",fontSize:10,color:B.muted}}>No synced store matches that name</div>
+):storeNameResults.map(n=>(
+<button key={n} onClick={()=>{setAccountInfoForm(f=>({...f,linkedStoreName:n}));setStoreNameQuery(n);setStoreNameResults([]);}} style={{display:"block",width:"100%",textAlign:"left",background:"transparent",border:"none",borderBottom:`1px solid ${B.border}`,padding:"7px 10px",cursor:"pointer",fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text}}>{n}</button>
+))}
+</div>
+)}
+</div>
+</div>
+)}
+</div>
+):(
+hasOnlineStore?(teamStoreUrl?<a href={teamStoreUrl} target="_blank" rel="noreferrer" style={{...valS,color:B.blue}}>{teamStoreUrl.replace(/^https?:\/\//,"")}</a>:<div style={valS}>Yes</div>):<div style={valS}>No</div>
+)}
+</div>
+)}
+{liveCfg.boosterClub&&(
+<div>
+<div style={lblS}>Booster Club</div>
+{editingAccountInfo?(
+<div style={{display:"flex",gap:5}}>
+{["Yes","No"].map(opt=>(
+<button key={opt} onClick={()=>setAccountInfoForm(f=>({...f,hasBoosterClub:opt==="Yes"}))} style={toggle(opt==="Yes"?accountInfoForm.hasBoosterClub===true:accountInfoForm.hasBoosterClub!==true)}>{opt}</button>
+))}
+</div>
+):(<div style={valS}>{hasBoosterClub?"Yes":"No"}</div>)}
+</div>
+)}
+<div><div style={lblS}>Contacts</div><div style={valS}>{schoolContacts.length}</div></div>
+<div><div style={lblS}>Open Deals</div><div style={valS}>{openDeals.length}</div></div>
+</div>
+{/* ── TEAM STORE PERFORMANCE — only once a store is linked above ── */}
+{linkedStoreName&&(
+<>
+<SectionHdr>TEAM STORE PERFORMANCE</SectionHdr>
+<div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(130px,1fr))",gap:12,background:B.surface,borderRadius:6,padding:14,border:`1px solid ${B.border}`}}>
+{loadingTeamStoreSummary?(
+<div style={{...valS,color:B.muted,gridColumn:"1/-1"}}>Loading store performance…</div>
+):teamStoreSummary?(<>
+<div><div style={lblS}>Orders</div><div style={valS}>{teamStoreSummary.orderCount}</div></div>
+<div><div style={lblS}>Revenue Collected</div><div style={valS}>{fmt$(teamStoreSummary.grossCollected)}</div></div>
+<div><div style={lblS}>ST1 Revenue Share</div><div style={{...valS,color:B.green}}>{fmt$(teamStoreSummary.revenueShare)}</div></div>
+<div><div style={lblS}>Paid To School</div><div style={valS}>{fmt$(teamStoreSummary.paidToSchool)}</div></div>
+<div><div style={lblS}>Outstanding To School</div><div style={{...valS,color:teamStoreSummary.outstandingToSchool>0?B.red:B.muted}}>{fmt$(teamStoreSummary.outstandingToSchool)}</div></div>
+</>):(
+<div style={{...valS,color:B.muted,gridColumn:"1/-1"}}>No synced orders found yet for "{linkedStoreName}".</div>
+)}
+</div>
+</>
+)}
+</>);
+})()}
+{/* Staff Coverage used to have its own section here, separate from the
+    actual contact list a few clicks away on the CONTACTS tab — moved there
+    entirely (see accountTab==="contacts" below) so who's on file and who's
+    missing live in one table instead of two disconnected views. */}
 {/* ── SPONSORSHIP ── */}
 {(sponsorshipMin||sponsorshipStatus)&&(
 <>
@@ -4639,77 +5408,181 @@ return(
 </div>
 </>
 )}
-{/* ── CONTACTS ── */}
-<SectionHdr sub={`${schoolContacts.length} total`}>CONTACTS / COACHES</SectionHdr>
-{schoolContacts.length===0&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted}}>No contacts yet.</div>}
-<div style={{display:"flex",flexDirection:"column",gap:6}}>
-{schoolContacts.map(c=>{
-const {cd,phase}=getCD(c);
-const top=cd.find(d=>!["Closed Won","Closed Lost"].includes(d.stage))||cd[0];
-const pc=PCOL[phase];
-return(
-<div key={c.id} onClick={()=>setSelId(c.id)} style={{background:B.white,border:`1px solid ${selId===c.id?B.orange:B.border}`,borderRadius:6,padding:"10px 14px",cursor:"pointer",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-<div style={{flex:1,minWidth:0}}>
-<div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,fontWeight:500,color:B.text}}>{cName(c)}</div>
-<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginTop:1}}>{[c.title,c.sport,c.email].filter(Boolean).join(" · ")}</div>
-</div>
-<div style={{display:"flex",alignItems:"center",gap:8,flexShrink:0}}>
-{top&&<div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:DSC[top.stage]||B.muted}}>{top.stage} · {fmt$(top.value||0)}</div>}
-<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:pc,background:`${pc}18`,padding:"2px 6px",borderRadius:3}}>{phase}</span>
-</div>
-</div>
-);
-})}
-</div>
-{/* ── ALL DEALS ── */}
-<SectionHdr sub={allDeals.length?`${allDeals.length} total · ${fmt$K(allDeals.reduce((a,d)=>a+(d.value||0),0))} pipeline`:"none yet"}>DEALS</SectionHdr>
-{allDeals.length===0&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,marginBottom:8}}>No deals yet — add one or upload a quote PDF created elsewhere.</div>}
-<div style={{display:"flex",flexDirection:"column",gap:6}}>
-{allDeals.sort((a,b)=>{const o=["Closed Won","Closed Lost"];const ai=o.includes(a.stage)?1:0;const bi=o.includes(b.stage)?1:0;return ai-bi;}).map(d=>(
-<div key={d.id} onClick={()=>{const c=schoolContacts.find(ct=>ct.id===d.contactId)||schoolContacts.find(ct=>cName(ct)===d.contact);if(c){setSelId(c.id);setCrmTab("deal");}}} style={{background:B.white,border:`1px solid ${["Closed Won"].includes(d.stage)?B.green:["Closed Lost"].includes(d.stage)?B.border:B.border}`,borderLeft:`3px solid ${DSC[d.stage]||B.muted}`,borderRadius:6,padding:"10px 14px",display:"flex",justifyContent:"space-between",alignItems:"center",gap:10,cursor:(d.contactId||d.contact)?"pointer":"default"}}>
-<div style={{flex:1,minWidth:0}}>
-<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,fontWeight:500,color:B.text}}>{d.name}</div>
-<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{[d.contact,d.quoteNumber?`Quote #${d.quoteNumber}`:"",(d.quoteItems?.[0]?.name||d.product||"")].filter(Boolean).join(" · ")}</div>
-</div>
-<div style={{textAlign:"right",flexShrink:0}}>
-<div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:DSC[d.stage]||B.muted}}>{d.stage}</div>
-<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.orange,fontWeight:500}}>{fmt$(d.value||0)}</div>
-{d.hasUploadedPdf&&<button onClick={e=>{e.stopPropagation();openStoredDealPdf(d.id,d.quotePdfName);}} style={{background:"none",border:"none",padding:"4px 0 0",fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.blue,cursor:"pointer"}}>Open PDF</button>}
-</div>
-</div>
-))}
-</div>
-{/* ── INVOICES & PAYMENTS ── */}
-{schoolInvoices.length>0&&(<>
-<SectionHdr sub={`${schoolInvoices.length} invoices · ${fmt$K(totalInvoiced)} total`}>INVOICES & PAYMENTS</SectionHdr>
-<div style={{display:"flex",flexDirection:"column",gap:5}}>
-{schoolInvoices.map(inv=>(
-<div key={inv.id} style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:5,padding:"9px 13px",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+{/* ── EXPANSION OPPORTUNITIES ── */}
+{expandOps.length>0&&(<>
+<SectionHdr>EXPANSION OPPORTUNITIES</SectionHdr>
+<div style={{display:"flex",flexDirection:"column",gap:8}}>
+{expandOps.map((op,i)=>(
+<div key={i} style={{background:`${B.orange}05`,border:`1px solid ${B.orange}20`,borderLeft:`3px solid ${B.orange}`,borderRadius:5,padding:"10px 14px",display:"flex",gap:12,alignItems:"flex-start"}}>
+<span style={{fontSize:16,flexShrink:0}}>{op.icon}</span>
 <div>
-<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,fontWeight:500}}>#{inv.number||inv.id}</div>
-<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{inv.date||""}</div>
-</div>
-<div style={{display:"flex",gap:12,alignItems:"center"}}>
-<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:inv.status==="paid"?B.green:inv.status==="overdue"?B.red:B.orange}}>{(inv.status||"").toUpperCase()}</span>
-<div style={{textAlign:"right"}}>
-<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text}}>{fmt$(inv.total||0)}</div>
-{inv.balance>0&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.red}}>Owed: {fmt$(inv.balance)}</div>}
-</div>
+<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,fontWeight:600,color:B.text,marginBottom:2}}>{op.title}</div>
+<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,lineHeight:1.4}}>{op.desc}</div>
 </div>
 </div>
 ))}
 </div>
 </>)}
+</>)}
+{accountTab==="contacts"&&(<>
+{/* ── CONTACTS / COACHES — table, merged with Staff Coverage ── */}
+{/* Used to be a separate card list here PLUS a whole other "Staff Coverage"
+    section on Overview repeating the same people by sport, with no way to
+    tell "we don't run this sport" apart from "we just don't have a coach
+    on file yet" — every untracked sport showed as a gap forever. Now one
+    table: real contacts with whatever sport/role they're on file for, a
+    row for each actually-missing sport/role with its own search button,
+    and a sport marked "not offered" drops out of the gap rows for good
+    (reversible below) instead of nagging every time this page loads. */}
+{(()=>{
+const thS={fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.muted,letterSpacing:1,padding:"7px 12px",background:B.surface,borderBottom:`1px solid ${B.border}`};
+const tdName={fontFamily:"'Lexend',sans-serif",fontSize:11,fontWeight:500,color:B.text,padding:"9px 12px",borderBottom:`1px solid ${B.border}`};
+const tdMuted={fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,padding:"9px 12px",borderBottom:`1px solid ${B.border}`};
+const smallBtn={background:"none",border:`1px solid ${B.border}`,borderRadius:4,padding:"3px 7px",fontSize:10,cursor:findingStaff?"default":"pointer",color:B.muted};
+const contactSportOf=(c)=>{
+let sp=typeof c.sport==="string"?c.sport:c.sport?.name||"";
+if(!sp||sp==="General"||!ACCOUNT_SPORTS.includes(sp)) sp=inferSportFromTitle(c.title)||"";
+return sp;
+};
+// sportsMode "none" (business): a business has people and titles, not
+// sports or an Athletic Director — no gap rows, no sport tracking at all.
+if(orgCfg.sportsMode==="none"){
+return(<>
+<SectionHdr sub={`${schoolContacts.length} on file`}>CONTACTS</SectionHdr>
+<div style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:6,overflow:"hidden"}}>
+<div style={{display:"grid",gridTemplateColumns:"1.3fr 1fr 1.4fr"}}>
+{["NAME","TITLE","EMAIL"].map(h=><div key={h} style={thS}>{h}</div>)}
+</div>
+{schoolContacts.length===0&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,padding:"12px"}}>No contacts yet.</div>}
+{schoolContacts.map(c=>(
+<div key={c.id} onClick={()=>setSelId(c.id)} style={{display:"grid",gridTemplateColumns:"1.3fr 1fr 1.4fr",cursor:"pointer"}}>
+<div style={tdName}>{cName(c)}</div>
+<div style={tdMuted}>{c.title||"—"}</div>
+<div style={tdMuted}>{c.email||"—"}</div>
+</div>
+))}
+</div>
+</>);
+}
+const coveredSports=new Set(schoolContacts.map(contactSportOf).filter(Boolean));
+// sportsMode "include" (club): gaps are only sports it actually offers
+// (opt-IN list) minus whichever of those are covered — not all tracked
+// sports minus an opt-OUT list the way a school works. No Athletic
+// Director row; clubs don't have one.
+if(orgCfg.sportsMode==="include"){
+const searchOneRole=(sp)=>findMissingStaff(schoolCleanName,city,state,[sp],false);
+const gapSports=offeredSports.filter(sp=>!coveredSports.has(sp));
+return(<>
+<SectionHdr sub={`${schoolContacts.length} on file${gapSports.length?` · ${gapSports.length} gap${gapSports.length!==1?"s":""}`:""}`}>CONTACTS / COACHES</SectionHdr>
+{offeredSports.length===0&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,marginBottom:8}}>Pick which sports this club offers in ACCOUNT INFO → EDIT to track coverage here.</div>}
+<div style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:6,overflow:"hidden"}}>
+<div style={{display:"grid",gridTemplateColumns:"1.3fr 1fr 1.4fr 90px"}}>
+{["NAME","SPORT / ROLE","EMAIL",""].map(h=><div key={h} style={thS}>{h}</div>)}
+</div>
+{schoolContacts.length===0&&offeredSports.length===0&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,padding:"12px"}}>No contacts yet.</div>}
+{schoolContacts.map(c=>(
+<div key={c.id} onClick={()=>setSelId(c.id)} style={{display:"grid",gridTemplateColumns:"1.3fr 1fr 1.4fr 90px",cursor:"pointer"}}>
+<div style={tdName}>{cName(c)}</div>
+<div style={tdMuted}>{contactSportOf(c)||c.title||"—"}</div>
+<div style={tdMuted}>{c.email||"—"}</div>
+<div style={{...tdMuted,padding:"9px 12px"}}></div>
+</div>
+))}
+{gapSports.map(sp=>(
+<div key={sp} style={{display:"grid",gridTemplateColumns:"1.3fr 1fr 1.4fr 90px",background:B.surface}}>
+<div style={tdMuted}>—</div>
+<div style={tdName}>{sp}</div>
+<div style={tdMuted}>—</div>
+<div style={{padding:"6px 10px",borderBottom:`1px solid ${B.border}`,display:"flex",alignItems:"center"}}>
+{hasPositiveIntent&&<button onClick={()=>searchOneRole(sp)} disabled={findingStaff} title={`Search for a ${sp} coach`} style={smallBtn}>🔎</button>}
+</div>
+</div>
+))}
+</div>
+{!hasPositiveIntent&&gapSports.length>0&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginTop:6}}>Search unlocks once someone here shows positive intent.</div>}
+</>);
+}
+// sportsMode "exclude" (school/college): track every ACCOUNT_SPORTS entry
+// as a gap until it's covered or explicitly marked not offered — most
+// schools run most sports, so starting from "everything, opt out the
+// exceptions" fits better than the club's opt-in list.
+const excludedSports=accountRecord?.excludedSports||[];
+const gapSports=ACCOUNT_SPORTS.filter(sp=>!coveredSports.has(sp)&&!excludedSports.includes(sp));
+const setExcludedSports=(next)=>dispatch("UPDATE_ACCOUNT",{id:ensureAccountRecord(),excludedSports:next});
+const searchOneRole=(sp,isAD)=>findMissingStaff(schoolCleanName,city,state,isAD?[]:[sp],isAD);
+const gapCount=gapSports.length+(orgCfg.athleticDirector&&!coverage.adContact?1:0);
+return(<>
+<SectionHdr sub={`${schoolContacts.length} on file${gapCount?` · ${gapCount} gap${gapCount!==1?"s":""}`:""}`}>CONTACTS / COACHES</SectionHdr>
+<div style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:6,overflow:"hidden"}}>
+<div style={{display:"grid",gridTemplateColumns:"1.3fr 1fr 1.4fr 90px"}}>
+{["NAME","SPORT / ROLE","EMAIL",""].map(h=><div key={h} style={thS}>{h}</div>)}
+</div>
+{orgCfg.athleticDirector&&(coverage.adContact?(
+<div onClick={()=>setSelId(coverage.adContact.id)} style={{display:"grid",gridTemplateColumns:"1.3fr 1fr 1.4fr 90px",cursor:"pointer"}}>
+<div style={tdName}>{cName(coverage.adContact)}</div>
+<div style={tdMuted}>Athletic Director</div>
+<div style={tdMuted}>{coverage.adContact.email||"—"}</div>
+<div style={{...tdMuted,padding:"9px 12px"}}></div>
+</div>
+):(
+<div style={{display:"grid",gridTemplateColumns:"1.3fr 1fr 1.4fr 90px",background:B.surface}}>
+<div style={tdMuted}>—</div>
+<div style={tdName}>Athletic Director</div>
+<div style={tdMuted}>—</div>
+<div style={{padding:"6px 10px",borderBottom:`1px solid ${B.border}`,display:"flex",alignItems:"center"}}>
+{hasPositiveIntent&&<button onClick={()=>searchOneRole(null,true)} disabled={findingStaff} title="Search for the Athletic Director" style={smallBtn}>🔎 Search</button>}
+</div>
+</div>
+))}
+{schoolContacts.filter(c=>c.id!==coverage.adContact?.id).map(c=>(
+<div key={c.id} onClick={()=>setSelId(c.id)} style={{display:"grid",gridTemplateColumns:"1.3fr 1fr 1.4fr 90px",cursor:"pointer"}}>
+<div style={tdName}>{cName(c)}</div>
+<div style={tdMuted}>{contactSportOf(c)||c.title||"—"}</div>
+<div style={tdMuted}>{c.email||"—"}</div>
+<div style={{...tdMuted,padding:"9px 12px"}}></div>
+</div>
+))}
+{gapSports.map(sp=>(
+<div key={sp} style={{display:"grid",gridTemplateColumns:"1.3fr 1fr 1.4fr 90px",background:B.surface}}>
+<div style={tdMuted}>—</div>
+<div style={tdName}>{sp}</div>
+<div style={tdMuted}>—</div>
+<div style={{padding:"6px 10px",borderBottom:`1px solid ${B.border}`,display:"flex",alignItems:"center",gap:4}}>
+{hasPositiveIntent&&<button onClick={()=>searchOneRole(sp,false)} disabled={findingStaff} title={`Search for a ${sp} coach`} style={smallBtn}>🔎</button>}
+<button onClick={()=>setExcludedSports([...excludedSports,sp])} title="We don't offer this sport" style={smallBtn}>Not offered</button>
+</div>
+</div>
+))}
+</div>
+{!hasPositiveIntent&&gapCount>0&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginTop:6}}>Search unlocks once someone here shows positive intent.</div>}
+{excludedSports.length>0&&(
+<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginTop:8}}>
+Not offered: {excludedSports.map(sp=>(
+<span key={sp} style={{marginRight:10}}>{sp} <button onClick={()=>setExcludedSports(excludedSports.filter(s=>s!==sp))} style={{background:"none",border:"none",color:B.blue,cursor:"pointer",fontSize:10,padding:0,textDecoration:"underline"}}>undo</button></span>
+))}
+</div>
+)}
+</>);
+})()}
 {/* ── CONTACTS FROM BOOKS ── */}
 {schoolInvoices.length>0&&schoolInvoices[0].customerId&&(()=>{
 const booksCustomerId=schoolInvoices[0].customerId;
-const bContacts=booksContactsByCustomer[booksCustomerId];
+const bContactsRaw=booksContactsByCustomer[booksCustomerId];
+// Books' own contact_persons for this customer often just repeats someone
+// already listed above under CONTACTS/COACHES — filter those out so the
+// same real person doesn't visibly show up twice.
+const bContacts=bContactsRaw&&bContactsRaw.filter(bc=>!schoolContacts.some(c=>
+(c.email&&bc.email&&c.email.toLowerCase()===bc.email.toLowerCase())
+||cName(c).toLowerCase()===(bc.name||"").trim().toLowerCase()
+));
 return(<>
 <SectionHdr sub={bContacts?`${bContacts.length} contact${bContacts.length!==1?"s":""}`:undefined}>CONTACTS (FROM BOOKS)</SectionHdr>
-{!bContacts?(
+{!bContactsRaw?(
 <button onClick={()=>loadBooksContacts(booksCustomerId)} disabled={loadingBooksContacts===booksCustomerId} style={{background:"none",border:`1px solid ${B.border}`,color:B.muted,borderRadius:4,padding:"6px 14px",fontSize:10,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,cursor:"pointer",letterSpacing:.3}}>{loadingBooksContacts===booksCustomerId?"LOADING…":"LOAD CONTACTS FROM BOOKS"}</button>
-):bContacts.length===0?(
+):bContactsRaw.length===0?(
 <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted}}>No contact persons on file in Books for this customer.</div>
+):bContacts.length===0?(
+<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted}}>Everyone Books has on file for this customer is already listed above.</div>
 ):(
 <div style={{display:"flex",flexDirection:"column",gap:5}}>
 {bContacts.map((c,i)=>(
@@ -4722,6 +5595,26 @@ return(<>
 )}
 </>);
 })()}
+</>)}
+{accountTab==="deals"&&(<>
+{/* ── ALL DEALS ── */}
+<SectionHdr sub={allDeals.length?`${allDeals.length} total · ${fmt$K(allDeals.reduce((a,d)=>a+(d.value||0),0))} pipeline`:"none yet"}>DEALS</SectionHdr>
+{allDeals.length===0&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,marginBottom:8}}>No deals yet — add one or upload a quote PDF created elsewhere.</div>}
+<div style={{display:"flex",flexDirection:"column",gap:6}}>
+{allDeals.sort((a,b)=>{const o=["Closed Won","Closed Lost"];const ai=o.includes(a.stage)?1:0;const bi=o.includes(b.stage)?1:0;return ai-bi;}).map(d=>(
+<div key={d.id} onClick={()=>openAccountDeal(d)} style={{background:B.white,border:`1px solid ${["Closed Won"].includes(d.stage)?B.green:["Closed Lost"].includes(d.stage)?B.border:B.border}`,borderLeft:`3px solid ${DSC[d.stage]||B.muted}`,borderRadius:6,padding:"10px 14px",display:"flex",justifyContent:"space-between",alignItems:"center",gap:10,cursor:"pointer"}}>
+<div style={{flex:1,minWidth:0}}>
+<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,fontWeight:500,color:B.text}}>{d.name}</div>
+<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{[d.contact,d.quoteNumber?`Quote #${d.quoteNumber}`:"",quoteLinesSummary(quoteLinesForDeal(d))||d.product||""].filter(Boolean).join(" · ")}</div>
+</div>
+<div style={{textAlign:"right",flexShrink:0}}>
+<div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:DSC[d.stage]||B.muted}}>{d.stage}</div>
+<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.orange,fontWeight:500}}>{fmt$(d.value||0)}</div>
+{d.hasUploadedPdf&&<button onClick={e=>{e.stopPropagation();openStoredDealPdf(d.id,d.quotePdfName);}} style={{background:"none",border:"none",padding:"4px 0 0",fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.blue,cursor:"pointer"}}>Open PDF</button>}
+</div>
+</div>
+))}
+</div>
 {/* ── ITEMS PURCHASED ── */}
 {purchasedItems.length>0&&(<>
 <SectionHdr sub={`${allItems.length} line items across ${schoolInvoices.length} invoice${schoolInvoices.length!==1?"s":""}`}>ITEMS PURCHASED</SectionHdr>
@@ -4759,21 +5652,100 @@ return(<>
 ))}
 </div>
 </>)}
-{/* ── EXPANSION OPPORTUNITIES ── */}
-{expandOps.length>0&&(<>
-<SectionHdr>EXPANSION OPPORTUNITIES</SectionHdr>
-<div style={{display:"flex",flexDirection:"column",gap:8}}>
-{expandOps.map((op,i)=>(
-<div key={i} style={{background:`${B.orange}05`,border:`1px solid ${B.orange}20`,borderLeft:`3px solid ${B.orange}`,borderRadius:5,padding:"10px 14px",display:"flex",gap:12,alignItems:"flex-start"}}>
-<span style={{fontSize:16,flexShrink:0}}>{op.icon}</span>
+</>)}
+{accountTab==="invoices"&&(<>
+{/* ── INVOICES & PAYMENTS ── */}
+<SectionHdr sub={schoolInvoices.length?`${schoolInvoices.length} invoices · ${fmt$K(totalInvoiced)} total`:"none yet"}>INVOICES & PAYMENTS</SectionHdr>
+{schoolInvoices.length===0&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted}}>No invoices on file yet.</div>}
+<div style={{display:"flex",flexDirection:"column",gap:5}}>
+{schoolInvoices.map(inv=>(
+<div key={inv.id} style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:5,padding:"9px 13px",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
 <div>
-<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,fontWeight:600,color:B.text,marginBottom:2}}>{op.title}</div>
-<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,lineHeight:1.4}}>{op.desc}</div>
+<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,fontWeight:500}}>#{inv.number||inv.id}</div>
+<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{inv.date||""}</div>
+</div>
+<div style={{display:"flex",gap:12,alignItems:"center"}}>
+<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:inv.status==="paid"?B.green:inv.status==="overdue"?B.red:B.orange}}>{(inv.status||"").toUpperCase()}</span>
+<div style={{textAlign:"right"}}>
+<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text}}>{fmt$(inv.total||0)}</div>
+{inv.balance>0&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.red}}>Owed: {fmt$(inv.balance)}</div>}
+</div>
 </div>
 </div>
 ))}
 </div>
 </>)}
+{accountTab==="history"&&(()=>{
+const schoolHistory=(s.activity||[]).filter(a=>(a.msg||"").includes(schoolCleanName));
+return(<>
+<SectionHdr sub={schoolHistory.length?`${schoolHistory.length} entries`:"none yet"}>HISTORY</SectionHdr>
+{schoolHistory.length===0&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted}}>No activity logged for this account yet.</div>}
+<div style={{display:"flex",flexDirection:"column",gap:6}}>
+{schoolHistory.map(a=>(
+<div key={a.id} style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:5,padding:"9px 13px"}}>
+<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text}}>{a.msg}</div>
+<div style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted,marginTop:2}}>{new Date(a.ts).toLocaleString("en-US",{month:"short",day:"numeric",hour:"numeric",minute:"2-digit"})}</div>
+</div>
+))}
+</div>
+</>);
+})()}
+{/* ── DEAL DETAIL (popup) ── */}
+{/* Clicking a deal here used to resolve its contact and navigate to that
+    person's own deal tab — the deal belongs to this account, so that
+    jumped away from the account entirely for the sake of editing it.
+    This opens in place instead; everything below acts on this deal's own
+    id, not on a contact. */}
+{accountDealModal&&(
+<div onClick={()=>setAccountDealModal(null)} style={{position:"fixed",inset:0,background:"rgba(0,0,0,.5)",zIndex:9000,display:"flex",alignItems:"center",justifyContent:"center",padding:20}}>
+<div onClick={e=>e.stopPropagation()} style={{background:B.white,borderRadius:10,boxShadow:"0 24px 80px rgba(0,0,0,.25)",width:"100%",maxWidth:560,maxHeight:"90vh",overflowY:"auto",padding:"16px 18px"}}>
+<div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:12}}>
+<div>
+<div style={{fontFamily:"'Russo One',sans-serif",fontSize:14,color:B.black}}>{accountDealModal.name}</div>
+{accountDealModal.contact&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginTop:2}}>Contact: {accountDealModal.contact}</div>}
+</div>
+<button onClick={()=>setAccountDealModal(null)} style={{background:"none",border:"none",color:B.muted,fontSize:16,cursor:"pointer"}}>✕</button>
+</div>
+<Lbl s={{marginBottom:5}}>Stage</Lbl>
+<div style={{display:"flex",flexWrap:"wrap",gap:4,marginBottom:12}}>
+{DEAL_STAGES.map(st=>(
+<button key={st} onClick={()=>{
+const prevStage=accountDealModal.stage;
+dispatch("UPDATE_DEAL",{id:accountDealModal.id,stage:st});
+crmUpdate("Deals",accountDealModal.zohoId,{Stage:st});
+setAccountDealModal(m=>({...m,stage:st}));
+toast("Stage updated","success");
+autoInvoiceOnClosedWon(accountDealModal,prevStage,st,toast);
+}} style={{background:accountDealModal.stage===st?DSC[st]:B.surface,color:accountDealModal.stage===st?B.white:B.muted,border:`1px solid ${accountDealModal.stage===st?DSC[st]:B.border}`,borderRadius:3,padding:"3px 7px",fontSize:9,cursor:"pointer"}}>{st}</button>
+))}
+</div>
+<Lbl s={{marginBottom:3}}>Value ($)</Lbl>
+<div style={{display:"flex",gap:6,marginBottom:12}}>
+<input type="number" value={accountDealModal.value||0} onChange={e=>setAccountDealModal(m=>({...m,value:Number(e.target.value)||0}))} style={{flex:1,background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"6px 8px",fontSize:12,boxSizing:"border-box"}}/>
+<OBtn sm onClick={()=>{dispatch("UPDATE_DEAL",{id:accountDealModal.id,value:accountDealModal.value});crmUpdate("Deals",accountDealModal.zohoId,{Amount:accountDealModal.value});toast("Deal value updated","success");}}>SAVE</OBtn>
+</div>
+<Lbl s={{marginBottom:3}}>Follow-up Date</Lbl>
+<input type="date" value={accountDealModal.followUpDate||""} onChange={e=>{
+dispatch("UPDATE_DEAL",{id:accountDealModal.id,followUpDate:e.target.value});
+crmUpdate("Deals",accountDealModal.zohoId,{Closing_Date:e.target.value});
+setAccountDealModal(m=>({...m,followUpDate:e.target.value}));
+}} style={{width:"100%",boxSizing:"border-box",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"6px 8px",fontSize:12,marginBottom:12}}/>
+<QuoteLinesEditor
+  items={accountDealModal.quoteItems||[]}
+  onChange={rows=>setAccountDealModal(m=>m?{...m,quoteItems:rows}:m)}
+  onSave={saveAccountDealLines}
+  busy={acctLinesBusy}
+  saving={acctLinesSaving}
+/>
+<Lbl s={{marginBottom:3}}>Notes</Lbl>
+<textarea defaultValue={accountDealModal.notes||""} onBlur={e=>dispatch("UPDATE_DEAL",{id:accountDealModal.id,notes:e.target.value})} rows={3} style={{width:"100%",boxSizing:"border-box",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"6px 8px",fontSize:12,resize:"vertical",marginBottom:14,fontFamily:"'Lexend',sans-serif"}}/>
+<div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+<button onClick={()=>{sharedDeleteDeal(accountDealModal,{dispatch,toast,cu});setAccountDealModal(null);}} style={{background:"none",border:`1px solid ${B.red}`,color:B.red,borderRadius:4,padding:"5px 10px",fontSize:10,cursor:"pointer"}}>🗑 Delete Deal</button>
+{accountDealModal.hasUploadedPdf&&<button onClick={()=>openStoredDealPdf(accountDealModal.id,accountDealModal.quotePdfName)} style={{background:"none",border:"none",color:B.blue,fontSize:11,cursor:"pointer"}}>Open PDF</button>}
+</div>
+</div>
+</div>
+)}
 </div>
 </div>
 );
@@ -4785,6 +5757,23 @@ const myDeals=openDeals.filter(d=>d.repId===cu?.id||d.assignee===cu?.id||!d.repI
 const overdue=openDeals.filter(d=>d.followUpDate&&dUntil(d.followUpDate)<0);
 const myPipeline=myDeals.reduce((a,d)=>a+(d.value||0),0);
 const totalContacts=(s.contacts||[]).filter(c=>!c.deadStatus).length;
+// Deals belong to the organization, not to whichever contact happens to
+// share its name/id — crmNavForDeal already encodes "accountId wins,
+// contact lookup is only a fallback for deals that predate that tagging",
+// Analytics opens a deal modal in place; CRM home still jumps to the
+// account/contact that owns the deal because we are already in CRM.
+const navToDeal=(d)=>{
+const nav=crmNavForDeal(d,s.contacts||[]);
+if(!nav) return;
+if(nav.id){
+setSelId(nav.id);setCrmTab(nav.tab==="quote"?"deal":(nav.tab||"overview"));
+if(nav.school){setLeftMode("accounts");setSelSchool(nav.school);}
+else setLeftMode("contacts");
+}else if(nav.school){
+setLeftMode("accounts");setSelSchool(nav.school);setSelId(null);
+if(nav.tab)setAccountTab(nav.tab==="quote"||nav.tab==="deal"?"deals":nav.tab);
+}
+};
 return(<>
 {/* Stats */}
 <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:10,marginBottom:22}}>
@@ -4799,9 +5788,8 @@ return(<>
 <Lbl s={{marginBottom:8,color:B.red}}>OVERDUE FOLLOW-UPS</Lbl>
 <div style={{display:"flex",flexDirection:"column",gap:6}}>
 {overdue.slice(0,5).map(d=>{
-const c=(s.contacts||[]).find(ct=>ct.id===d.contactId||(ct.fullName||"")===d.contact);
 return(
-<div key={d.id} onClick={()=>setSelId(c?.id)} style={{background:B.white,border:`1px solid ${B.red}30`,borderLeft:`3px solid ${B.red}`,borderRadius:4,padding:"9px 13px",cursor:c?"pointer":"default",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+<div key={d.id} onClick={()=>navToDeal(d)} style={{background:B.white,border:`1px solid ${B.red}30`,borderLeft:`3px solid ${B.red}`,borderRadius:4,padding:"9px 13px",cursor:"pointer",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
 <div>
 <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,fontWeight:500,color:B.text}}>{d.name}</div>
 <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{d.contact||"—"} · {d.stage}</div>
@@ -4830,7 +5818,7 @@ return(
 const c=(s.contacts||[]).find(ct=>ct.id===d.contactId||(ct.fullName||"")===d.contact);
 const dsc=DSC[d.stage]||B.muted;
 return(
-<div key={d.id} onClick={()=>c&&setSelId(c.id)} style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:4,padding:"9px 13px",cursor:c?"pointer":"default",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+<div key={d.id} onClick={()=>navToDeal(d)} style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:4,padding:"9px 13px",cursor:"pointer",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
 <div>
 <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,fontWeight:500,color:B.text}}>{d.name}</div>
 <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{d.contact||c&&(c.fullName||"")}</div>
@@ -4957,7 +5945,7 @@ return(
 </div>
 {/* Title + Sport (prominent) */}
 <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:8}}>
-<div><Lbl s={{marginBottom:3,fontSize:8}}>Title / Role</Lbl><input value={profileForm.title||""} onChange={e=>setPF("title",e.target.value)} style={iS}/></div>
+<div><Lbl s={{marginBottom:3,fontSize:8}}>Title / Role</Lbl><input value={profileForm.title||""} onChange={e=>setPF("title",e.target.value)} placeholder="e.g. Athletic Director" style={iS}/><RoleQuickPick value={profileForm.title} onChange={r=>setPF("title",r)}/></div>
 <div>
 <Lbl s={{marginBottom:3,fontSize:8,color:B.purple,letterSpacing:1}}>★ SPORT</Lbl>
 <select value={profileForm.sport||""} onChange={e=>setPF("sport",e.target.value)}
@@ -5083,7 +6071,7 @@ style={{...iS,border:`1.5px solid ${profileForm.sport?B.purple:B.border}`,color:
 <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:1.5,marginBottom:10}}>ORG PROFILE</div>
 <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
 {[
-["Type", sel.orgType==="school"?"School / District":sel.orgType==="college"?"College / University":sel.orgType?"Organization / Club":"—"],
+["Type", sel.orgType?orgTypeLabel(sel.orgType):"—"],
 ["School Class", sel.schoolClass||"—"],
 ["# Athletes", sel.numAthletes||"—"],
 ["# Sports", sel.numSports||"—"],
@@ -5230,7 +6218,7 @@ return (
 <button onClick={()=>setQuoteItems(qi=>[...qi,{id:mkId(),name:"",qty:1,rate:0}])} style={{background:"none",border:`1px dashed ${B.border}`,color:B.muted,borderRadius:4,padding:"6px 12px",fontSize:11,cursor:"pointer",width:"100%",marginBottom:12,fontFamily:"'Lexend',sans-serif"}}>+ ADD ITEM</button>
 <div style={{marginBottom:12}}><Lbl s={{marginBottom:4}}>Notes</Lbl><textarea defaultValue={activeDeal.quoteNotes||""} onBlur={e=>dispatch("UPDATE_DEAL",{id:activeDeal.id,quoteNotes:e.target.value})} placeholder="Special pricing, terms, conditions..." rows={2} style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 10px",fontSize:11,fontFamily:"'Lexend',sans-serif",resize:"vertical",boxSizing:"border-box"}}/></div>
 <div style={{display:"flex",gap:7,flexWrap:"wrap",marginBottom:10}}>
-<OBtn onClick={()=>{dispatch("UPDATE_DEAL",{id:activeDeal.id,quoteItems,quoteNumber:quoteNum,quoteAmount:qSubtotal,value:qSubtotal});setDealValueInput(String(qSubtotal));crmUpdate("Deals",activeDeal.zohoId,{Amount:qSubtotal});toast("Quote saved — deal value updated","success");}}>SAVE QUOTE</OBtn>
+<OBtn onClick={()=>{persistDealQuoteLines({...activeDeal,quoteNumber:quoteNum},quoteItems,{dispatch,toast});setDealValueInput(String(quoteLinesTotal(quoteItems)));}}>SAVE QUOTE</OBtn>
 <OBtn col={B.blue} onClick={printPDF} disabled={quoteItems.length===0}>PRINT / PDF</OBtn>
 {activeDeal.hasUploadedPdf&&<OBtn col={B.blue} onClick={()=>openStoredDealPdf(activeDeal.id,activeDeal.quotePdfName)}>OPEN PDF</OBtn>}
 <a href={zbUrl} target="_blank" rel="noreferrer" style={{background:B.surface,color:B.textMid,border:`1px solid ${B.borderD}`,borderRadius:5,padding:"8px 13px",fontFamily:"'Lexend',sans-serif",fontSize:11,textDecoration:"none",display:"inline-flex",alignItems:"center"}}>OPEN ZOHO BOOKS ↗</a>
@@ -5953,7 +6941,7 @@ style={{width:100,background:B.surface,border:`1px solid ${B.orange}`,color:B.or
 <Lbl s={{marginBottom:5}}>Move Stage</Lbl>
 <div style={{display:"flex",flexWrap:"wrap",gap:4,marginBottom:10}}>
 {DEAL_STAGES.map(st=>(
-<button key={st} onClick={()=>{const prevStage=sel_d.stage;dispatch("UPDATE_DEAL",{id:sel_d.id,stage:st});dispatch("LOG",{msg:cu?.name+" moved "+sel_d.name+" → "+st});toast("Moved to "+st,"success");if(sel_d.zohoId)fetch("/api/zoho",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({service:"crm",endpoint:`/Deals/${sel_d.zohoId}`,method:"PUT",body:{data:[{Stage:st}]}})}).catch(()=>{});autoInvoiceOnClosedWon(sel_d,prevStage,st,toast);}} style={{background:sel_d.stage===st?DSC[st]:B.surface,color:sel_d.stage===st?B.white:B.muted,border:"1px solid "+(sel_d.stage===st?DSC[st]:B.border),borderRadius:3,padding:"3px 7px",fontSize:9,fontFamily:"'Lexend',sans-serif"}}>{st}</button>
+<button key={st} onClick={()=>{const prevStage=sel_d.stage;dispatch("UPDATE_DEAL",{id:sel_d.id,stage:st});dispatch("LOG",{msg:cu?.name+" moved "+sel_d.name+" → "+st});toast("Moved to "+st,"success");if(sel_d.zohoId)fetch("/api/zoho",{method:"POST",headers:{"Content-Type":"application/json",...internalAuthHeaders()},body:JSON.stringify({service:"crm",endpoint:`/Deals/${sel_d.zohoId}`,method:"PUT",body:{data:[{Stage:st}]}})}).catch(()=>{});autoInvoiceOnClosedWon(sel_d,prevStage,st,toast);}} style={{background:sel_d.stage===st?DSC[st]:B.surface,color:sel_d.stage===st?B.white:B.muted,border:"1px solid "+(sel_d.stage===st?DSC[st]:B.border),borderRadius:3,padding:"3px 7px",fontSize:9,fontFamily:"'Lexend',sans-serif"}}>{st}</button>
 ))}
 </div>
 <div style={{marginBottom:9}}>
@@ -6057,7 +7045,7 @@ dispatch("LOG",{msg:`Order "${o.name}" advanced to ${nextStage}`});
 if(nextStage==="Invoiced"){
 setInvoicing(o.id);
 try{
-const r=await fetch("/api/zoho",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({
+const r=await fetch("/api/zoho",{method:"POST",headers:{"Content-Type":"application/json",...internalAuthHeaders()},body:JSON.stringify({
 service:"books",endpoint:"/invoices",method:"POST",
 body:{
 customer_name:o.school||o.contact||o.name,
@@ -6235,7 +7223,7 @@ return(
 <button onClick={async()=>{
 setInvoicing(o.id);
 try{
-const r=await fetch("/api/zoho",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({
+const r=await fetch("/api/zoho",{method:"POST",headers:{"Content-Type":"application/json",...internalAuthHeaders()},body:JSON.stringify({
 service:"books",endpoint:"/invoices",method:"POST",
 body:{customer_name:o.school||o.contact||o.name,date:today(),due_date:new Date(Date.now()+30*86400000).toISOString().slice(0,10),
 line_items:o.items?.length>0?o.items.map(item=>({name:item.name,description:item.description||"",quantity:item.qty||1,rate:item.rate||0})):[{name:o.name,description:o.notes||"",quantity:1,rate:o.value||0}],
@@ -7133,7 +8121,7 @@ let all = []; let page = 1;
 while(true) {
 const criteria = encodeURIComponent(`(Modified_Time:greater_than:${dt})`);
 const endpoint = `/${module}/search?criteria=${criteria}&fields=${fList}&per_page=200&page=${page}`;
-const res = await fetch("/api/zoho",{method:"POST",headers:{"Content-Type":"application/json"},
+const res = await fetch("/api/zoho",{method:"POST",headers:{"Content-Type":"application/json",...internalAuthHeaders()},
 body:JSON.stringify({service:"crm",endpoint,method:"GET"})
 }).then(r=>r.json());
 if(!Array.isArray(res.data)||!res.data.length) break;
@@ -7163,7 +8151,7 @@ let page = 1;
 while(true) {
 const criteria = encodeURIComponent(`(Created_Time:between:${chunk.start}:${chunk.end})`);
 const endpoint = `/${module}/search?criteria=${criteria}&fields=${fList}&per_page=200&page=${page}`;
-const res = await fetch("/api/zoho",{method:"POST",headers:{"Content-Type":"application/json"},
+const res = await fetch("/api/zoho",{method:"POST",headers:{"Content-Type":"application/json",...internalAuthHeaders()},
 body:JSON.stringify({service:"crm",endpoint,method:"GET"})
 }).then(r=>r.json());
 if(!Array.isArray(res.data)||!res.data.length) break;
@@ -7205,7 +8193,7 @@ dispatch("SET_CONTACTS_LAST_SYNC",now);
 const existingDeals=s.deals||[]; const existingDealZohoIds=new Set(existingDeals.map(d=>d.zohoId).filter(Boolean));
 const stageMap={"Qualification":"Quoted","Value Proposition":"Quoted","Id. Decision Makers":"Follow-Up 1","Perception Analysis":"Follow-Up 1","Proposal/Price Quote":"Quoted","Negotiation/Review":"Negotiating","Closed Won":"Closed Won","Closed Lost":"Closed Lost"};
 let dealsAdded=0,dealsUpdated=0;
-dealRows.forEach(zd=>{const zn=v=>typeof v==="string"?v:v?.name||v?.display_value||"";const zStage=zn(zd.Stage)||"Quoted";const localStage=DEAL_STAGES.includes(zStage)?zStage:(stageMap[zStage]||"Quoted");if(existingDealZohoIds.has(zd.id)){const local=existingDeals.find(d=>d.zohoId===zd.id);if(local&&local.stage!==localStage){dispatch("UPDATE_DEAL",{id:local.id,stage:localStage,zohoStage:zStage});dealsUpdated++;autoInvoiceOnClosedWon(local,local.stage,localStage,toast);}}else if(!dealIsSuppressed({id:"zoho_d_"+zd.id,zohoId:zd.id},s)){dispatch("ADD_DEAL",{id:"zoho_d_"+zd.id,zohoId:zd.id,name:zn(zd.Deal_Name)||"Untitled",contact:zn(zd.Contact_Name),school:zn(zd.Account_Name),value:Number(zd.Amount)||0,stage:localStage,zohoStage:zStage,notes:zd.Description||"",followUpDate:zd.Closing_Date||"",lastTouch:now,priority:"warm",touchHistory:[],source:"zoho-crm"});dealsAdded++;}});
+dealRows.forEach(zd=>{const zn=v=>typeof v==="string"?v:v?.name||v?.display_value||"";const zStage=zn(zd.Stage)||"Quoted";const localStage=DEAL_STAGES.includes(zStage)?zStage:(stageMap[zStage]||"Quoted");if(existingDealZohoIds.has(zd.id)){const local=existingDeals.find(d=>d.zohoId===zd.id);if(local&&local.stage!==localStage){dispatch("UPDATE_DEAL",{id:local.id,stage:localStage,zohoStage:zStage});dealsUpdated++;autoInvoiceOnClosedWon(local,local.stage,localStage,toast);}if(local&&!filledQuoteLines(local.quoteItems).length){const qf=quoteFieldsFromZohoRecord(zd);if(qf.quoteItems.length)dispatch("UPDATE_DEAL",{id:local.id,...qf});}}else if(!dealIsSuppressed({id:"zoho_d_"+zd.id,zohoId:zd.id},s)){dispatch("ADD_DEAL",{id:"zoho_d_"+zd.id,zohoId:zd.id,name:zn(zd.Deal_Name)||"Untitled",contact:zn(zd.Contact_Name),school:zn(zd.Account_Name),value:Number(zd.Amount)||0,stage:localStage,zohoStage:zStage,notes:zd.Description||"",followUpDate:zd.Closing_Date||"",lastTouch:now,priority:"warm",touchHistory:[],source:"zoho-crm",...quoteFieldsFromZohoRecord(zd)});dealsAdded++;}});
 const liveDealIds=new Set(dealRows.map(zd=>zd.id));
 const deadDealIds=existingDeals.filter(d=>d.zohoId&&!liveDealIds.has(d.zohoId)).map(d=>d.id);
 if(deadDealIds.length) dispatch("REMOVE_DEALS",deadDealIds);
@@ -7397,16 +8385,6 @@ const col=aiMap[field];
 if(col&&col in row) return String(row[col]||"").trim();
 return get(row,...fallback);
 };
-const inferSport=t=>{
-const tl=(t||"").toLowerCase();
-if(/track|cross.?country|xc|t&f|tf\b/.test(tl)) return "Track & Field";
-if(/baseball|softball/.test(tl)) return "Baseball/Softball";
-if(/volleyball/.test(tl)) return "Volleyball";
-if(/football/.test(tl)) return "Football";
-if(/basketball/.test(tl)) return "Basketball";
-if(/wrestling/.test(tl)) return "Wrestling";
-return importSport||"General";
-};
 const inferPriority=t=>{
 const tl=(t||"").toLowerCase();
 if(/athletic.?director|\bad\b|administrator|principal|superintendent|director/.test(tl)) return "high";
@@ -7446,7 +8424,7 @@ if(!state&&importState) state=importState;
 if(!fullName&&!email) return null;
 const sportCol=res(row,"sport","Sport","Sports","Sport Name");
 // Fall back to list-level sport if no sport found in the row
-const sport=sportCol||inferSport(title)||(importSport||"General");
+const sport=sportCol||inferSportFromTitle(title)||(importSport||"General");
 return {
 id:mkId(), firstName, lastName,
 fullName:fullName||email||"Unknown",
@@ -8433,9 +9411,9 @@ setEnrollingContact(null);
 )}
 <div style={{marginTop:6}}>
 {c.optedOut?(
-<button onClick={()=>{dispatch("UPDATE_CONTACT",{id:c.id,optedOut:false});toast(`${c.fullName||c.firstName} opted back in`,"success");if(c.zohoId){fetch("/api/zoho",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({service:"crm",endpoint:`/Leads/${c.zohoId}`,method:"PUT",body:{data:[{id:c.zohoId,Email_Opt_Out:false}]}})}).catch(()=>{});}}} style={{background:B.greenBg,color:B.green,border:`1px solid ${B.green}40`,borderRadius:3,padding:"3px 8px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,fontWeight:700,letterSpacing:.3,cursor:"pointer",width:"100%"}}>OPT BACK IN</button>
+<button onClick={()=>{dispatch("UPDATE_CONTACT",{id:c.id,optedOut:false});toast(`${c.fullName||c.firstName} opted back in`,"success");if(c.zohoId){fetch("/api/zoho",{method:"POST",headers:{"Content-Type":"application/json",...internalAuthHeaders()},body:JSON.stringify({service:"crm",endpoint:`/Leads/${c.zohoId}`,method:"PUT",body:{data:[{id:c.zohoId,Email_Opt_Out:false}]}})}).catch(()=>{});}}} style={{background:B.greenBg,color:B.green,border:`1px solid ${B.green}40`,borderRadius:3,padding:"3px 8px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,fontWeight:700,letterSpacing:.3,cursor:"pointer",width:"100%"}}>OPT BACK IN</button>
 ):(
-<button onClick={()=>{dispatch("UPDATE_CONTACT",{id:c.id,optedOut:true});toast(`${c.fullName||c.firstName} opted out`,"info");if(c.zohoId){fetch("/api/zoho",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({service:"crm",endpoint:`/Leads/${c.zohoId}`,method:"PUT",body:{data:[{id:c.zohoId,Email_Opt_Out:true}]}})}).catch(()=>{});}}} style={{background:"none",color:B.red,border:`1px solid ${B.red}40`,borderRadius:3,padding:"3px 8px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,fontWeight:700,letterSpacing:.3,cursor:"pointer",width:"100%"}}>OPT OUT</button>
+<button onClick={()=>{dispatch("UPDATE_CONTACT",{id:c.id,optedOut:true});toast(`${c.fullName||c.firstName} opted out`,"info");if(c.zohoId){fetch("/api/zoho",{method:"POST",headers:{"Content-Type":"application/json",...internalAuthHeaders()},body:JSON.stringify({service:"crm",endpoint:`/Leads/${c.zohoId}`,method:"PUT",body:{data:[{id:c.zohoId,Email_Opt_Out:true}]}})}).catch(()=>{});}}} style={{background:"none",color:B.red,border:`1px solid ${B.red}40`,borderRadius:3,padding:"3px 8px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,fontWeight:700,letterSpacing:.3,cursor:"pointer",width:"100%"}}>OPT OUT</button>
 )}
 </div>
 <div style={{marginTop:6}}>
@@ -8870,7 +9848,7 @@ bulkSel.forEach(cid=>{
 const c=(s.contacts||[]).find(x=>x.id===cid);
 if(c&&!c.optedOut){
 dispatch("UPDATE_CONTACT",{id:cid,optedOut:true});
-if(c.zohoId){fetch("/api/zoho",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({service:"crm",endpoint:`/Leads/${c.zohoId}`,method:"PUT",body:{data:[{id:c.zohoId,Email_Opt_Out:true}]}})}).catch(()=>{});}
+if(c.zohoId){fetch("/api/zoho",{method:"POST",headers:{"Content-Type":"application/json",...internalAuthHeaders()},body:JSON.stringify({service:"crm",endpoint:`/Leads/${c.zohoId}`,method:"PUT",body:{data:[{id:c.zohoId,Email_Opt_Out:true}]}})}).catch(()=>{});}
 }
 });
 toast(`${bulkSel.size} contacts opted out`,"info");setBulkSel(new Set());
@@ -8918,7 +9896,7 @@ const CAMP_TEMPLATES = [
 {id:"blank", name:"Start Blank", product:"", goal:"", channels:[], metrics:[], tone:"friendly", ctx:"", assetTypes:[]},
 ];
 function ModMarketing() {
-const {s,dispatch,toast,setMod}=useApp();
+const {s,dispatch,toast,setMod,pullFromServer}=useApp();
 const [tab,setTab]=useState("campaigns");
 const [selCampId,setSelCampId]=useState(null);
 const [showNewCampForm,setShowNewCampForm]=useState(false);
@@ -9002,6 +9980,8 @@ const [schedDelay,setSchedDelay]=useState(60);
 const [schedTouchGap,setSchedTouchGap]=useState(7);
 const [maxPerDay,setMaxPerDay]=useState(0);
 const [schedStatus,setSchedStatus]=useState(null);
+const [reconcileStatus,setReconcileStatus]=useState(null);
+const [reconcilePreview,setReconcilePreview]=useState(null);
 const [lastSendErr,setLastSendErr]=useState(null);
 const [intCollapsed,setIntCollapsed]=useState(false);
 const [segRunning,setSegRunning]=useState(false);
@@ -10821,6 +11801,25 @@ const handleScheduleClick=()=>{
 setSchedStatus('applying');
 setTimeout(()=>{applySchedule();setSchedStatus('done');setTimeout(()=>setSchedStatus(null),2500);},120);
 };
+const runReconcile=async(dryRun)=>{
+setReconcileStatus(dryRun?'checking':'applying');
+try{
+const r=await fetch("/api/outreach/reconcile-sent",{method:"POST",headers:{"Content-Type":"application/json",...internalAuthHeaders()},body:JSON.stringify({campaignId:selCamp.id,dryRun})});
+const d=await r.json();
+if(!d.ok){toast(d.error||"Reconcile failed","error");setReconcileStatus(null);return;}
+if(dryRun){
+setReconcilePreview(d);
+setReconcileStatus(null);
+if(d.matched===0)toast(`Checked ${d.checked} of ${d.candidates} pending contact(s) against Gmail — no already-sent matches found`,"info");
+}else{
+setReconcilePreview(null);
+setReconcileStatus('done');
+setTimeout(()=>setReconcileStatus(null),2500);
+toast(`Marked ${d.matched} contact(s) as already sent — they won't be re-emailed`,"success");
+pullFromServer(); // pull the corrected enrollments into local state right away
+}
+}catch(e){toast(`Reconcile error: ${e.message}`,"error");setReconcileStatus(null);}
+};
 return(
 <div className="card" style={{padding:"12px 14px",marginBottom:14,borderLeft:`3px solid ${B.blue}`}}>
 <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:8,flexWrap:"wrap"}}>
@@ -10866,7 +11865,40 @@ style={{background:"none",border:`1px solid ${B.red}40`,borderRadius:5,padding:"
 CLEAR SCHEDULE
 </button>
 )}
+<button onClick={()=>runReconcile(true)} disabled={reconcileStatus==='checking'||reconcileStatus==='applying'}
+title="Checks every pending contact in this campaign against the real Gmail Sent folder — catches contacts a timed-out batch actually emailed but never got marked sent, so they aren't re-emailed"
+style={{background:"none",border:`1px solid ${B.purple}60`,borderRadius:5,padding:"7px 12px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.purple,cursor:reconcileStatus?"not-allowed":"pointer",whiteSpace:"nowrap"}}>
+{reconcileStatus==='checking'?"⟳ CHECKING…":reconcileStatus==='done'?"✓ RECONCILED":"RECONCILE VS GMAIL SENT"}
+</button>
 </div>
+{reconcilePreview&&(
+<div style={{marginBottom:8,background:B.surface,border:`1px solid ${B.purple}40`,borderRadius:5,padding:"8px 10px"}}>
+<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,marginBottom:6}}>
+Checked {reconcilePreview.checked} of {reconcilePreview.candidates} pending contact(s){reconcilePreview.truncated?" (stopped early — time budget; re-run to keep checking)":""} against Gmail Sent since {reconcilePreview.sinceDate} —{" "}
+<strong>{reconcilePreview.matched} already received a real email</strong> and would be marked sent without re-sending.
+</div>
+{reconcilePreview.matched>0&&(
+<div style={{maxHeight:160,overflowY:"auto",marginBottom:8}}>
+{reconcilePreview.matches.map(m=>(
+<div key={m.contactId} style={{display:"flex",justifyContent:"space-between",gap:8,fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,padding:"2px 0"}}>
+<span>{m.name||m.email} <span style={{color:B.border}}>·</span> {m.email}</span>
+<span>{new Date(m.sentAt).toLocaleString()}</span>
+</div>
+))}
+</div>
+)}
+<div style={{display:"flex",gap:8}}>
+{reconcilePreview.matched>0&&(
+<button onClick={()=>{if(window.confirm(`Mark ${reconcilePreview.matched} contact(s) as already sent? This does not send any email — it only stops them from being re-emailed.`))runReconcile(false);}}
+disabled={reconcileStatus==='applying'}
+style={{background:B.purple,color:B.white,border:"none",borderRadius:5,padding:"6px 14px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,fontWeight:700,cursor:reconcileStatus==='applying'?"not-allowed":"pointer"}}>
+{reconcileStatus==='applying'?"⟳ MARKING…":`MARK ${reconcilePreview.matched} AS SENT`}
+</button>
+)}
+<button onClick={()=>setReconcilePreview(null)} style={{background:"none",border:`1px solid ${B.border}`,borderRadius:5,padding:"6px 14px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.muted,cursor:"pointer"}}>DISMISS</button>
+</div>
+</div>
+)}
 {pendingScheduledCount>0&&(
 <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>
 {pendingScheduledCount} batch{pendingScheduledCount!==1?"es":""} pending · cron fires every 15 min Mon–Fri 9am–5pm MT · batches outside hours shift to next 9am MT automatically.
@@ -11851,6 +12883,7 @@ function SendStatusPanel(){
 const [status,setStatus]=useState(null);
 const [loading,setLoading]=useState(true);
 const [toggling,setToggling]=useState(false);
+const [toggleError,setToggleError]=useState("");
 const [expandedBatch,setExpandedBatch]=useState(null);
 useEffect(()=>{
 fetch("/api/cron/status",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"status"})})
@@ -11859,12 +12892,16 @@ fetch("/api/cron/status",{method:"POST",headers:{"Content-Type":"application/jso
 const toggle=async()=>{
 if(!status||toggling)return;
 setToggling(true);
+setToggleError("");
 const action=status.globalPause?"resume":"pause";
 try{
 const r=await fetch("/api/cron/status",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action})});
 const d=await r.json();
-if(d.ok)setStatus(s=>({...s,globalPause:d.globalPause}));
-}catch(e){}
+if(d.ok) setStatus(s=>({...s,globalPause:d.globalPause}));
+else setToggleError(d.error||`${action==="pause"?"Pause":"Resume"} failed — still showing the old state`);
+}catch(e){
+setToggleError(`${action==="pause"?"Pause":"Resume"} failed: ${e.message} — still showing the old state`);
+}
 setToggling(false);
 };
 const fmtTime=iso=>{if(!iso)return"—";const d=new Date(iso);return d.toLocaleString("en-US",{month:"short",day:"numeric",hour:"numeric",minute:"2-digit",hour12:true});};
@@ -11880,6 +12917,7 @@ return(
 <div>
 <div style={{fontFamily:"'Russo One',sans-serif",fontSize:15,color:paused?"#ef4444":"#22c55e",marginBottom:4}}>{paused?"⏸ EMAIL SENDING PAUSED":"▶ EMAIL SENDING ACTIVE"}</div>
 <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted}}>{paused?"All batch sends are halted. Click RESUME to restart the cron sender.":"Emails are sending normally. Click PAUSE to stop all cron sends immediately."}</div>
+{toggleError&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:"#ef4444",marginTop:4}}>⚠ {toggleError}</div>}
 </div>
 <button onClick={toggle} disabled={toggling} style={{background:paused?"#22c55e":"#ef4444",color:"#fff",border:"none",borderRadius:6,padding:"10px 24px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:11,fontWeight:700,letterSpacing:.8,cursor:toggling?"not-allowed":"pointer",opacity:toggling?.6:1,minWidth:110}}>
 {toggling?"…":paused?"RESUME":"PAUSE"}
@@ -12838,7 +13876,7 @@ const previewInvoice=async()=>{
 if(!selectedDeal&&!manualDealName.trim()){toast("Pick a deal or type a customer name","error");return;}
 setInvoiceWorking(true);setInvoicePreview(null);setInvoiceCreated(null);
 try{
-const r=await fetch('/api/agents/ledger/invoice',{method:'POST',headers:{'Content-Type':'application/json'},
+const r=await fetch('/api/agents/ledger/invoice',{method:'POST',headers:{'Content-Type':'application/json',...internalAuthHeaders()},
 body:JSON.stringify({action:'draft',dryRun:true,...invoiceParams()})});
 const d=await r.json();
 if(d.error) throw new Error(d.error);
@@ -12849,7 +13887,7 @@ setInvoiceWorking(false);
 const createInvoiceNow=async()=>{
 setInvoiceWorking(true);
 try{
-const r=await fetch('/api/agents/ledger/invoice',{method:'POST',headers:{'Content-Type':'application/json'},
+const r=await fetch('/api/agents/ledger/invoice',{method:'POST',headers:{'Content-Type':'application/json',...internalAuthHeaders()},
 body:JSON.stringify({action:'draft',dryRun:false,...invoiceParams()})});
 const d=await r.json();
 if(d.error) throw new Error(d.error);
@@ -12862,7 +13900,7 @@ const sendInvoiceNow=async()=>{
 if(!invoiceCreated?.dealInvoiceId){toast("Nothing to send","error");return;}
 setInvoiceWorking(true);
 try{
-const r=await fetch('/api/agents/ledger/invoice',{method:'POST',headers:{'Content-Type':'application/json'},
+const r=await fetch('/api/agents/ledger/invoice',{method:'POST',headers:{'Content-Type':'application/json',...internalAuthHeaders()},
 body:JSON.stringify({action:'confirm',dealInvoiceId:invoiceCreated.dealInvoiceId})});
 const d=await r.json();
 if(d.error) throw new Error(d.error);
@@ -12879,7 +13917,7 @@ reader.onload=async(ev)=>{
 const pdfBase64=ev.target.result.split(',')[1];
 setBillFileData({pdfBase64,pdfName:file.name});
 try{
-const r=await fetch('/api/agents/ledger/vendor-bill',{method:'POST',headers:{'Content-Type':'application/json'},
+const r=await fetch('/api/agents/ledger/vendor-bill',{method:'POST',headers:{'Content-Type':'application/json',...internalAuthHeaders()},
 body:JSON.stringify({action:'extract',pdfBase64,pdfName:file.name,dryRun:true})});
 const d=await r.json();
 setBillPreview(d);
@@ -12892,7 +13930,7 @@ const createBillNow=async()=>{
 if(!billFileData){toast("Upload a bill first","error");return;}
 setBillCreating(true);
 try{
-const r=await fetch('/api/agents/ledger/vendor-bill',{method:'POST',headers:{'Content-Type':'application/json'},
+const r=await fetch('/api/agents/ledger/vendor-bill',{method:'POST',headers:{'Content-Type':'application/json',...internalAuthHeaders()},
 body:JSON.stringify({action:'create',dryRun:false,pdfBase64:billFileData.pdfBase64,pdfName:billFileData.pdfName,supplierId:billPreview?.supplierId||undefined})});
 const d=await r.json();
 if(!d.ok) throw new Error(d.error||"Create failed");
@@ -15103,8 +16141,8 @@ const staleContacts=(s.contacts||[]).filter(c=>/^zoho_[cl]_/.test(c.id));
 const staleDeals=(s.deals||[]).filter(d=>/^zoho_d_/.test(d.id));
 if(!staleContacts.length&&!staleDeals.length){toast("No Zoho-synced contacts/deals cached here","info");return;}
 if(!window.confirm(`Remove ${staleContacts.length} Zoho-synced contact(s) and ${staleDeals.length} Zoho-synced deal(s) cached in RevOps? This only clears this app's local cache — nothing in Zoho itself is touched. Use this after wiping/reseeding Zoho CRM so old records don't linger alongside the fresh ones.`))return;
-dispatch("SET_CONTACTS",(s.contacts||[]).filter(c=>!/^zoho_[cl]_/.test(c.id)));
-dispatch("SET_DEALS",(s.deals||[]).filter(d=>!/^zoho_d_/.test(d.id)));
+if(staleContacts.length) dispatch("REMOVE_CONTACTS",staleContacts.map(c=>c.id));
+if(staleDeals.length) dispatch("REMOVE_DEALS",staleDeals.map(d=>d.id));
 toast(`Cleared ${staleContacts.length} contact(s), ${staleDeals.length} deal(s) — use SYNC ZOHO CRM in Prospecting → Contact DB to pull the fresh data`,"success");
 }} style={{background:B.redBg,color:B.red,border:`1px solid ${B.red}40`,borderRadius:5,padding:"7px 13px",fontSize:11,fontFamily:"'Lexend',sans-serif"}}>CLEAR ZOHO CACHE</button>
 </div>

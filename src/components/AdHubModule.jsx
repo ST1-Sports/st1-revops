@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react'
 import { routeTask } from '../lib/aiRouter.js'
 import { readAppState, setAppStateField } from '../lib/appStateSync.js'
+import { internalAuthHeaders } from '../lib/internalAuth.js'
 
 // ─── BRAND ────────────────────────────────────────────────────────────────────
 const B = {
@@ -558,7 +559,7 @@ async function campaignAction(pid, body) {
   const p = PLATFORMS.find(x => x.id === pid)
   const r = await fetch(p.endpoint, {
     method:  'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...internalAuthHeaders() },
     body:    JSON.stringify(body),
   })
   const d = await r.json()
@@ -1247,7 +1248,7 @@ function CreateTab({ userRole, onSwitchToTab }) {
         try {
           const r = await fetch(p.endpoint, {
             method:  'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: { 'Content-Type': 'application/json', ...internalAuthHeaders() },
             body:    JSON.stringify({ action: 'create', campaign }),
           })
           const d = await r.json()

@@ -45,9 +45,9 @@ const SOURCE_MAP = [
   },
   {
     name: 'Product catalog',
-    owner: 'WooCommerce sync / ST1 Product table',
+    owner: 'Shopify sync / ST1 Product table',
     content: 'Product names, prices, stock status, categories, tags, attributes, images, links.',
-    add: 'Sync WooCommerce products through the existing product sync flow.',
+    add: 'Sync Shopify products through the existing product sync flow.',
   },
   {
     name: 'Customers and leads',

@@ -238,33 +238,101 @@ export default async function handler(req, res) {
     }
 
     if (req.method === 'PATCH') {
-      const { id, leads, templates, ...fields } = req.body || {};
+      const { id, leads, templates, touchUpdates, bounceUpdates, ...fields } = req.body || {};
       if (!id) return res.status(400).json({ error: 'id required' });
       const data = {};
       for (const k of PATCHABLE) if (fields[k] !== undefined) data[k] = fields[k];
-      if (Array.isArray(leads)) {
-        let heldLeads = leads;
+
+      let effectiveLeads = leads;
+      let existingForStatus; // reused below instead of a second findUnique
+      const hasTouchUpdates = Array.isArray(touchUpdates) && touchUpdates.length;
+      const hasBounceUpdates = Array.isArray(bounceUpdates) && bounceUpdates.length;
+      if (!Array.isArray(effectiveLeads) && (hasTouchUpdates || hasBounceUpdates)) {
+        // Targeted update: marking a send or a bounce sent only ever touches
+        // a couple of leads, but a list here can hold thousands. Re-uploading
+        // the FULL leads array on every single one of these — what the
+        // full-`leads` path below does — doesn't scale: once enough leads
+        // carry real sent subject/body text, that payload crosses Vercel's
+        // platform-level request body ceiling (no app-level bodyParser
+        // sizeLimit can raise that), so the PATCH starts failing with no
+        // error surfaced client-side, leaving contacts that were genuinely
+        // emailed looking unsent forever — and queued to be re-sent next
+        // run. This reads the current leads server-side and patches in just
+        // the touched ones, so the client payload stays tiny regardless of
+        // list size.
+        try {
+          existingForStatus = prisma.outreachBatch
+            ? await prisma.outreachBatch.findUnique({ where: { id: String(id) } })
+            : await fallbackGetRaw(String(id));
+        } catch (e) {
+          if (!isMissingTable(e)) throw e;
+          existingForStatus = await fallbackGetRaw(String(id));
+        }
+        if (!existingForStatus) return res.status(404).json({ error: 'Batch not found' });
+
+        const byLead = new Map();
+        if (hasTouchUpdates) {
+          for (const u of touchUpdates) {
+            if (!u?.leadId) continue;
+            const list = byLead.get(u.leadId) || [];
+            list.push(u);
+            byLead.set(u.leadId, list);
+          }
+        }
+        const bounceByLead = hasBounceUpdates ? new Map(bounceUpdates.filter(b => b?.leadId).map(b => [b.leadId, b])) : null;
+
+        effectiveLeads = (existingForStatus.leads || []).map(l => {
+          const touchUpdatesForLead = byLead.get(l.id);
+          const bounce = bounceByLead?.get(l.id);
+          if (!touchUpdatesForLead && !bounce) return l;
+          let next = l;
+          if (touchUpdatesForLead) {
+            const touches = [...(l.touches || [])];
+            for (const u of touchUpdatesForLead) {
+              const idx = u.touchIdx;
+              if (typeof idx !== 'number' || idx < 0) continue;
+              while (touches.length <= idx) touches.push({ subject: '', body: '' });
+              touches[idx] = {
+                ...(touches[idx] || {}),
+                ...(u.subject !== undefined ? { subject: u.subject } : {}),
+                ...(u.body !== undefined ? { body: u.body } : {}),
+                sentAt: u.sentAt,
+              };
+            }
+            next = { ...next, touches };
+          }
+          if (bounce) {
+            next = { ...next, bounced: true, bouncedAt: bounce.bouncedAt, bounceNote: bounce.bounceNote };
+          }
+          return next;
+        });
+      }
+
+      if (Array.isArray(effectiveLeads)) {
+        let heldLeads = effectiveLeads;
         try {
           const all = prisma.outreachBatch
             ? await prisma.outreachBatch.findMany()
             : await fallbackList();
-          const preview = { id: String(id), leads, status: fields.status, createdAt: all?.find(b => b.id === id)?.createdAt };
+          const preview = { id: String(id), leads: effectiveLeads, status: fields.status, createdAt: all?.find(b => b.id === id)?.createdAt };
           const held = applyHolds(preview, (all || []).map(b => b.id === id ? preview : b));
-          heldLeads = held.batch.leads || leads;
+          heldLeads = held.batch.leads || effectiveLeads;
         } catch { /* save the posted leads; holds apply on next load */ }
         data.leads = heldLeads;
         Object.assign(data, countsFrom(heldLeads));
       }
       if (templates && typeof templates === 'object') data.templates = templates;
-      if (Array.isArray(leads) && fields.status === undefined) {
-        let prevStatus = 'draft';
-        try {
-          const existing = prisma.outreachBatch
-            ? await prisma.outreachBatch.findUnique({ where: { id: String(id) }, select: { status: true } })
-            : await fallbackGetRaw(String(id));
-          prevStatus = existing?.status || 'draft';
-        } catch { /* promote from the incoming leads anyway */ }
-        data.status = promoteStatus(prevStatus, leads);
+      if (Array.isArray(effectiveLeads) && fields.status === undefined) {
+        let prevStatus = existingForStatus?.status || 'draft';
+        if (existingForStatus === undefined) {
+          try {
+            const existing = prisma.outreachBatch
+              ? await prisma.outreachBatch.findUnique({ where: { id: String(id) }, select: { status: true } })
+              : await fallbackGetRaw(String(id));
+            prevStatus = existing?.status || 'draft';
+          } catch { /* promote from the incoming leads anyway */ }
+        }
+        data.status = promoteStatus(prevStatus, effectiveLeads);
       }
       if (Object.keys(data).length === 0) return res.status(400).json({ error: 'no updatable fields provided' });
       let batch;

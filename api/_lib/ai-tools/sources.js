@@ -1,5 +1,9 @@
 import { prisma } from '../prisma.js';
+import { updateSettingSafely } from '../settingSync.js';
 import { getZohoToken } from '../zoho-token.js';
+import { CRM_BASE } from '../zohoCrm.js';
+import { BOOKS as BOOKS_BASE } from '../zoho-books.js';
+import { zohoCriteriaValue } from '../zohoAccount.js';
 import {
   minAcceptableScore,
   prismaContainsOr,
@@ -7,9 +11,6 @@ import {
   rankPriceItems,
   tokenizePriceQuery,
 } from '../priceSearch.js';
-
-const CRM_BASE = 'https://www.zohoapis.com/crm/v3';
-const BOOKS_BASE = 'https://www.zohoapis.com/books/v3';
 
 export const ST1_BRAND_GUIDANCE = {
   id: 'st1-brand-voice',
@@ -143,7 +144,7 @@ export function mapProduct(product) {
     tags: product.tags || [],
     attributes: product.attributes || [],
     modifiedAt: product.date_modified ? product.date_modified.toISOString() : null,
-    source: source('ST1 product catalog (WooCommerce sync)', { recordId: String(product.id) }),
+    source: source('ST1 product catalog (Shopify sync)', { recordId: String(product.id) }),
   };
 }
 
@@ -367,7 +368,7 @@ export async function searchZohoCrm(query, limit = 10) {
   }
 
   async function search(module, field) {
-    const criteria = encodeURIComponent(`(${field}:contains:${q})`);
+    const criteria = encodeURIComponent(`(${field}:contains:${zohoCriteriaValue(q)})`);
     const res = await fetch(`${CRM_BASE}/${module}/search?criteria=${criteria}&per_page=${safeLimit(limit, 10, 25)}`, {
       headers: { Authorization: `Zoho-oauthtoken ${token}` },
     });
@@ -465,44 +466,42 @@ export async function listKnowledgeDocuments() {
 }
 
 export async function saveKnowledgeDocument(doc) {
-  const setting = await prisma.setting.findUnique({ where: { key: KNOWLEDGE_DOCS_SETTING_KEY } });
-  const docs = Array.isArray(setting?.value?.documents) ? setting.value.documents : [];
-  const sourceName = String(doc.sourceName || '').trim().slice(0, 200);
-  const existing = doc.id
-    ? docs.find(d => d.id === doc.id)
-    : (sourceName ? docs.find(d => d.sourceType === doc.sourceType && d.sourceName === sourceName) : null);
-  const nextDoc = {
-    id: existing?.id || doc.id || `kdoc_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`,
-    title: String(doc.title || 'Untitled document').trim().slice(0, 160),
-    sourceType: doc.sourceType,
-    sourceName,
-    content: String(doc.content || '').slice(0, 200_000),
-    uploadedAt: new Date().toISOString(),
-  };
-  const nextDocs = [nextDoc, ...docs.filter(d => d.id !== nextDoc.id)].slice(0, 100);
-  await prisma.setting.upsert({
-    where: { key: KNOWLEDGE_DOCS_SETTING_KEY },
-    create: { key: KNOWLEDGE_DOCS_SETTING_KEY, value: { documents: nextDocs } },
-    update: { value: { documents: nextDocs } },
+  let result;
+  await updateSettingSafely(KNOWLEDGE_DOCS_SETTING_KEY, async (value) => {
+    const docs = Array.isArray(value?.documents) ? value.documents : [];
+    const sourceName = String(doc.sourceName || '').trim().slice(0, 200);
+    const existing = doc.id
+      ? docs.find(d => d.id === doc.id)
+      : (sourceName ? docs.find(d => d.sourceType === doc.sourceType && d.sourceName === sourceName) : null);
+    const nextDoc = {
+      id: existing?.id || doc.id || `kdoc_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`,
+      title: String(doc.title || 'Untitled document').trim().slice(0, 160),
+      sourceType: doc.sourceType,
+      sourceName,
+      content: String(doc.content || '').slice(0, 200_000),
+      uploadedAt: new Date().toISOString(),
+    };
+    const nextDocs = [nextDoc, ...docs.filter(d => d.id !== nextDoc.id)].slice(0, 100);
+    result = {
+      id: nextDoc.id,
+      title: nextDoc.title,
+      sourceType: nextDoc.sourceType,
+      sourceName: nextDoc.sourceName || null,
+      uploadedAt: nextDoc.uploadedAt,
+      charCount: nextDoc.content.length,
+    };
+    return { documents: nextDocs };
   });
-  return {
-    id: nextDoc.id,
-    title: nextDoc.title,
-    sourceType: nextDoc.sourceType,
-    sourceName: nextDoc.sourceName || null,
-    uploadedAt: nextDoc.uploadedAt,
-    charCount: nextDoc.content.length,
-  };
+  return result;
 }
 
 export async function deleteKnowledgeDocument(id) {
-  const setting = await prisma.setting.findUnique({ where: { key: KNOWLEDGE_DOCS_SETTING_KEY } });
-  const docs = Array.isArray(setting?.value?.documents) ? setting.value.documents : [];
-  const nextDocs = docs.filter(doc => doc.id !== id);
-  await prisma.setting.upsert({
-    where: { key: KNOWLEDGE_DOCS_SETTING_KEY },
-    create: { key: KNOWLEDGE_DOCS_SETTING_KEY, value: { documents: nextDocs } },
-    update: { value: { documents: nextDocs } },
+  let deleted = false;
+  await updateSettingSafely(KNOWLEDGE_DOCS_SETTING_KEY, async (value) => {
+    const docs = Array.isArray(value?.documents) ? value.documents : [];
+    const nextDocs = docs.filter(doc => doc.id !== id);
+    deleted = docs.length !== nextDocs.length;
+    return { documents: nextDocs };
   });
-  return { deleted: docs.length !== nextDocs.length };
+  return { deleted };
 }
