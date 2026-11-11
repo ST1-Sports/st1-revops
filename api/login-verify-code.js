@@ -13,18 +13,13 @@
  * SET_APP_USER locally right away — this device won't see a brand-new rep
  * via /api/state until its next pull otherwise.
  */
-import crypto from 'crypto';
 import { prisma } from './_lib/prisma.js';
 import { setCors } from './_lib/cors.js';
-import { updateSettingSafely } from './_lib/settingSync.js';
-import { hashLoginCode, isAllowedLoginEmail, normalizeLoginEmail, repNameFromEmail, safeEqual } from './_lib/loginCode.js';
+import { hashLoginCode, isAllowedLoginEmail, normalizeLoginEmail, safeEqual } from './_lib/loginCode.js';
+import { upsertRepForEmail } from './_lib/repAccount.js';
 import { issueSessionToken } from './_lib/session.js';
 
 const MAX_ATTEMPTS = 5;
-
-function mkId() {
-  return 'r_' + crypto.randomBytes(9).toString('base64url');
-}
 
 export default async function handler(req, res) {
   setCors(res, 'POST, OPTIONS');
@@ -51,30 +46,7 @@ export default async function handler(req, res) {
     }
     await prisma.loginCode.delete({ where: { email } }).catch(() => {});
 
-    let repOut, appUserOut;
-    await updateSettingSafely('app_state', (value) => {
-      const state = value || {};
-      const reps = Array.isArray(state.reps) ? state.reps : [];
-      const appUsers = Array.isArray(state.appUsers) ? state.appUsers : [];
-
-      let rep = reps.find(r => normalizeLoginEmail(r.email) === email);
-      let repsNext = reps;
-      if (!rep) {
-        rep = { id: mkId(), name: repNameFromEmail(email), email, title: '', createdAt: Date.now() };
-        repsNext = [...reps, rep];
-      }
-
-      let appUser = appUsers.find(u => u.repId === rep.id);
-      let appUsersNext = appUsers;
-      if (!appUser) {
-        appUser = { repId: rep.id, isAdmin: appUsers.length === 0 };
-        appUsersNext = [...appUsers, appUser];
-      }
-
-      repOut = rep;
-      appUserOut = appUser;
-      return { ...state, reps: repsNext, appUsers: appUsersNext };
-    });
+    const { rep: repOut, appUser: appUserOut } = await upsertRepForEmail(email);
 
     return res.json({
       ok: true,

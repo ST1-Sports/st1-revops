@@ -10,6 +10,7 @@
  */
 import { prisma } from './prisma.js';
 import { encodeMimeWord } from './mimeHeader.js';
+import { connectedRefreshTokenForKey } from './repGmailToken.js';
 
 const _tokenCache = {};
 
@@ -22,8 +23,9 @@ export async function getGmailAccessToken(repEnvKey = '') {
     throw new Error('Gmail not configured — set GMAIL_CLIENT_ID and GMAIL_CLIENT_SECRET in Vercel env vars');
   }
 
-  let refreshToken = null;
-  if (repEnvKey) {
+  // The rep's Google sign-in connection first; the older per-rep token is a fallback.
+  let refreshToken = repEnvKey ? await connectedRefreshTokenForKey(repEnvKey) : null;
+  if (repEnvKey && !refreshToken) {
     try {
       const dbKey = `gmail_token_${repEnvKey.toUpperCase().replace(/[^A-Z0-9]/g, '_')}`;
       const row = await prisma.setting.findUnique({ where: { key: dbKey } });

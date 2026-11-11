@@ -57,6 +57,33 @@ export default async function handler(req, res) {
   const isAdmin = me.isAdmin;
 
   if (req.method === 'GET') {
+    // Recent email activity from the rep's own inbox (threads that passed the hard filters).
+    if (req.query?.activity === '1') {
+      const since = new Date(Date.now() - 14 * 86400000);
+      const threads = await prisma.threadSnapshot.findMany({
+        where: { userId, filterReason: null, lastMessageAt: { gte: since } },
+        orderBy: { lastMessageAt: 'desc' },
+        take: 100,
+      });
+      const items = await prisma.followUpItem.findMany({
+        where: { userId, threadId: { in: threads.map(t => t.threadId) } },
+        select: { threadId: true, bucket: true, status: true },
+      });
+      const bucketByThread = new Map(items.map(i => [i.threadId, i.status === 'open' ? i.bucket : i.status]));
+      return res.json({
+        threads: threads.map(t => ({
+          threadId: t.threadId,
+          subject: t.subject || '(no subject)',
+          participants: (Array.isArray(t.participants) ? t.participants : [])
+            .map(p => (typeof p === 'string' ? p : p?.name || p?.email))
+            .filter(Boolean)
+            .slice(0, 4),
+          lastMessageAt: t.lastMessageAt,
+          followUp: bucketByThread.get(t.threadId) || null,
+          gmailUrl: `https://mail.google.com/mail/u/0/#all/${t.threadId}`,
+        })),
+      });
+    }
     if (req.query?.counts === '1') {
       const owesReply = await prisma.followUpItem.count({ where: openWhere(userId, { bucket: 'owes_reply' }) });
       const awaiting = await prisma.followUpItem.count({ where: openWhere(userId, { bucket: 'awaiting_them' }) });

@@ -61,7 +61,7 @@ import { fetchAllAreaContactIds, createOutreachBatchFromIds, listNameForArea, ou
 import { isBradFollowUpReply } from "../lib/junkReply.js";
 import { COACH_ROLES } from "../../api/_lib/roleUtils.js";
 import { internalAuthHeaders } from "../lib/internalAuth.js";
-import { radarFetch, saveSessionToken } from "../lib/session.js";
+import { radarFetch, saveSessionToken, sessionHeaders } from "../lib/session.js";
 const HOME_AGENT_NAME = "Scout";
 const CmdCenter      = lazy(() => import('./CommandCenter.jsx'))
 const ExpansionPage  = lazy(() => import('./Expansion.jsx'))
@@ -529,14 +529,14 @@ setTimeout(() => {
 try { localStorage.setItem(STORE, JSON.stringify(merged)); } catch {}
 }, 0);
 const {currentUserId: _cid, agentHistory: _ah, priceLists: _pl, ...toSync} = merged;
-fetch("/api/state", {method:"POST", headers:{"Content-Type":"application/json"},
+fetch("/api/state", {method:"POST", headers:{"Content-Type":"application/json",...sessionHeaders()},
 body: JSON.stringify({state: toSync})}).catch(()=>{});
 return merged;
 });
 } else {
 setRaw(prev => {
 const {currentUserId: _cid, agentHistory: _ah, priceLists: _pl2, ...toSync} = prev;
-fetch("/api/state", {method:"POST", headers:{"Content-Type":"application/json"},
+fetch("/api/state", {method:"POST", headers:{"Content-Type":"application/json",...sessionHeaders()},
 body: JSON.stringify({state: toSync})}).catch(()=>{});
 return prev;
 });
@@ -564,7 +564,7 @@ const {currentUserId: _cid, agentHistory: _ah, priceLists: _pl, ...toSync} = nex
 pendingServerSave.current = toSync;
 if (serverTimer.current) clearTimeout(serverTimer.current);
 serverTimer.current = setTimeout(() => {
-fetch("/api/state", {method:"POST", headers:{"Content-Type":"application/json"},
+fetch("/api/state", {method:"POST", headers:{"Content-Type":"application/json",...sessionHeaders()},
 body: JSON.stringify({state: toSync})}).catch(()=>{});
 pendingServerSave.current = null;
 }, 2500);
@@ -957,7 +957,7 @@ case "RESET":               return {...SEED, currentUserId:prev.currentUserId, i
 default:                  return prev;
 }
 }
-function GmailStatusBanner({repKey="",repEmail=""}) {
+function GmailStatusBanner({repKey=""}) {
 const [status,setStatus]=React.useState(null);
 const check=React.useCallback(()=>{
 setStatus(null);
@@ -988,7 +988,7 @@ if(status.ok) return(
 <button onClick={check} style={{marginLeft:"auto",background:"none",border:"1px solid #bbf7d0",borderRadius:3,padding:"1px 7px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",color:"#15803d",cursor:"pointer"}}>RECHECK</button>
 </div>
 );
-const setupUrl=repKey?`/api/gmail-setup?repKey=${repKey}${repEmail?`&hint=${encodeURIComponent(repEmail)}`:""}`:"/api/gmail-setup";
+const setupUrl=repKey?"/api/auth/google?consent=1":"/api/gmail-setup";
 const fixes={
 network:<>The API server is unreachable. <strong>Try a hard refresh (Ctrl+Shift+R)</strong> — if the problem persists, check that your Vercel deployment is live and the function logs show no build errors.</>,
 setup:<>Gmail not connected. <a href={setupUrl} target="_blank" rel="noreferrer" style={{color:"#b91c1c",fontWeight:600,textDecoration:"none",border:"1px solid #b91c1c",borderRadius:3,padding:"1px 8px",marginLeft:4}}>Connect your Gmail →</a></>,
@@ -1104,7 +1104,7 @@ const skipSync = new Set([
 ]);
 if (!skipSync.has(action)) {
 const {currentUserId: _cid, contacts: _c, agentHistory: _ah, priceLists: _pl, ...toSync} = next;
-fetch("/api/state", {method:"POST", headers:{"Content-Type":"application/json"},
+fetch("/api/state", {method:"POST", headers:{"Content-Type":"application/json",...sessionHeaders()},
 body: JSON.stringify({state: toSync})}).catch(()=>{});
 }
 return next;
@@ -1355,7 +1355,7 @@ const NAV = useMemo(()=>[
 {id:"briefing",    icon:"⌂", label:"Home",            badge:urgentCount(s)},
 {id:"analytics",   icon:"▣", label:"Analytics"},
 {id:"crm",           icon:"◈", label:"CRM"},
-{id:"follow-up-radar", icon:"📡", label:"Follow-Up Radar", badge:radarOwes},
+{id:"follow-up-radar", icon:"📡", label:"My Follow-ups", badge:radarOwes},
 {id:"sponsorships",  icon:"★", label:"Sponsorships",  badge:(s.contacts||[]).filter(c=>c.sponsorshipStatus==="proposed").length||0},
 {id:"_s_growth"},
 {id:"prospecting", icon:"⊕", label:"Prospecting"},
@@ -1705,12 +1705,41 @@ return(
 </AppCtx.Provider>
 );
 }
+const LOGIN_ERRORS={
+not_st1:"Use your @st1sports.com Google account.",
+expired:"That sign-in link expired. Try again.",
+google_cancelled:"Google sign-in was cancelled.",
+google_failed:"Google sign-in didn't complete. Try again, or use an email code.",
+google_not_configured:"Google sign-in isn't set up yet. Use an email code for now.",
+session_key_missing:"Sign-in isn't fully configured yet (SESSION_SECRET). Ask an admin.",
+};
 function Login({dispatch, reps=[], appUsers=[]}) {
-const [mode,setMode]=useState("email"); // "email" (default) or "pin" (fallback)
-const [sel,setSel]=useState(null);
-const [pin,setPin]=useState("");
+const [mode,setMode]=useState("google"); // "google" (default) or "email" (fallback code)
 const [shake,setShake]=useState(false);
-const [loading,setLoading]=useState(false);
+// Returning from Google: the signed session arrives in the URL fragment (never sent to a server).
+const [googleBusy,setGoogleBusy]=useState(()=>/(?:^|[#&])session=/.test(window.location.hash||""));
+const [googleError,setGoogleError]=useState(()=>{
+const err=new URLSearchParams(window.location.search).get("login_error");
+return err?(LOGIN_ERRORS[err]||"Sign-in failed. Try again."):"";
+});
+useEffect(()=>{
+const hasError=new URLSearchParams(window.location.search).has("login_error");
+const m=/(?:^|[#&])session=([^&]+)/.exec(window.location.hash||"");
+if(hasError||m) window.history.replaceState(null,"",window.location.pathname);
+if(!m) return;
+const token=decodeURIComponent(m[1]);
+saveSessionToken(token);
+fetch("/api/auth/me",{headers:{Authorization:`Bearer ${token}`}})
+.then(r=>r.json().then(d=>({ok:r.ok,d})))
+.then(({ok,d})=>{
+if(!ok||!d.repId) throw new Error(d.error||"Sign-in failed");
+if(d.rep){if(reps.some(x=>x.id===d.repId)) dispatch("UPDATE_REP",d.rep); else dispatch("ADD_REP",d.rep);}
+dispatch("SET_APP_USER",d.appUser);
+dispatch("LOGIN",d.repId);
+})
+.catch(e=>{saveSessionToken(null);setGoogleError(e.message);setGoogleBusy(false);});
+// eslint-disable-next-line react-hooks/exhaustive-deps
+},[]);
 // ── Email-code login ──────────────────────────────────────────────────────
 const [email,setEmail]=useState("");
 const [code,setCode]=useState("");
@@ -1748,29 +1777,6 @@ setShake(true);setTimeout(()=>setShake(false),500);
 }catch(err){setEmailError(`Verify failed: ${err.message}`);}
 setEmailBusy(false);
 };
-// ── PIN login (fallback) ──────────────────────────────────────────────────
-const loginUsers = appUsers.map(au=>{
-const rep = reps.find(r=>r.id===au.repId);
-if(!rep) return null;
-const initials = (rep.name||"?").split(" ").map(w=>w[0]).join("").slice(0,2).toUpperCase();
-return { id: rep.id, name: rep.name, email: rep.email, initials, color: B.blue };
-}).filter(Boolean);
-const doLogin=async()=>{
-if(!sel||pin.length<4) return;
-setLoading(true);
-try{
-const r=await fetch("/api/login",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({repId:sel.id,pin})});
-const d=await r.json();
-if(d.ok){
-dispatch("LOGIN",sel.id);
-} else {
-setPin("");setShake(true);setTimeout(()=>setShake(false),500);
-}
-}catch(e){
-setPin("");setShake(true);setTimeout(()=>setShake(false),500);
-}
-setLoading(false);
-};
 return (
 <div style={{minHeight:"100vh",background:B.pageBg,display:"flex",alignItems:"center",justifyContent:"center",fontFamily:"'Lexend',sans-serif"}}>
 <style>{`@import url('https://fonts.googleapis.com/css2?family=Russo+One&family=Lexend+Zetta:wght@700;900&family=Lexend:wght@300;400;500&display=swap');*{box-sizing:border-box;margin:0;padding:0}button{cursor:pointer;font-family:'Lexend',sans-serif;transition:all .12s}button:hover{opacity:.82}input{font-family:'Lexend',sans-serif;outline:none}@keyframes fu{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}@keyframes shk{0%,100%{transform:translateX(0)}25%{transform:translateX(-6px)}75%{transform:translateX(6px)}}.fu{animation:fu .3s}.shk{animation:shk .3s}`}</style>
@@ -1782,7 +1788,22 @@ return (
 <div style={{fontFamily:"'Russo One',sans-serif",fontSize:19,color:B.black,letterSpacing:.3}}>ST1 RevOps</div>
 <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.orange,letterSpacing:3,marginTop:3}}>SIGN IN</div>
 </div>
-{mode==="email"?(
+{mode==="google"?(
+<div className="fu">
+<a href="/api/auth/google" onClick={()=>setGoogleBusy(true)}
+style={{display:"flex",alignItems:"center",justifyContent:"center",gap:10,width:"100%",background:B.white,color:B.text,border:`1px solid ${B.border}`,borderRadius:6,padding:"11px",fontFamily:"'Lexend',sans-serif",fontSize:13,fontWeight:500,textDecoration:"none",boxShadow:"0 1px 2px rgba(0,0,0,.06)",opacity:googleBusy?.6:1,pointerEvents:googleBusy?"none":"auto"}}>
+<svg width="18" height="18" viewBox="0 0 48 48" aria-hidden="true"><path fill="#FFC107" d="M43.6 20.5H42V20H24v8h11.3C33.7 32.7 29.2 36 24 36c-6.6 0-12-5.4-12-12s5.4-12 12-12c3.1 0 5.8 1.2 7.9 3.1l5.7-5.7C34.1 6.1 29.3 4 24 4 12.9 4 4 12.9 4 24s8.9 20 20 20 20-8.9 20-20c0-1.3-.1-2.4-.4-3.5z"/><path fill="#FF3D00" d="M6.3 14.7l6.6 4.8C14.7 15.1 19 12 24 12c3.1 0 5.8 1.2 7.9 3.1l5.7-5.7C34.1 6.1 29.3 4 24 4 16.3 4 9.7 8.3 6.3 14.7z"/><path fill="#4CAF50" d="M24 44c5.2 0 9.9-2 13.4-5.2l-6.2-5.2C29.2 35.1 26.7 36 24 36c-5.2 0-9.6-3.3-11.3-8l-6.5 5C9.5 39.6 16.2 44 24 44z"/><path fill="#1976D2" d="M43.6 20.5H42V20H24v8h11.3c-.8 2.2-2.2 4.2-4.1 5.6l6.2 5.2C37 39.2 44 34 44 24c0-1.3-.1-2.4-.4-3.5z"/></svg>
+{googleBusy?"Signing in…":"Sign in with Google"}
+</a>
+<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginTop:10,lineHeight:1.5,textAlign:"center"}}>
+Use your @st1sports.com account. This also connects your Gmail, so your follow-ups, drafts and email activity show up here. Nothing is sent unless you click Send.
+</div>
+{googleError&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.red,marginTop:10,textAlign:"center"}}>{googleError}</div>}
+<div style={{marginTop:16,paddingTop:14,borderTop:`1px solid ${B.border}`,textAlign:"center"}}>
+<button onClick={()=>{setMode("email");setGoogleError("");}} style={{background:"none",border:"none",color:B.muted,fontSize:10,fontFamily:"'Lexend',sans-serif",textDecoration:"underline",cursor:"pointer",padding:0}}>Trouble with Google? Use an email code instead</button>
+</div>
+</div>
+):(
 <div className={shake?"shk fu":"fu"}>
 <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:2,marginBottom:7}}>{codeSent?"ENTER YOUR CODE":"YOUR ST1 EMAIL"}</div>
 {!codeSent?(
@@ -1814,51 +1835,9 @@ style={{width:"100%",background:code.length===6?B.orange:B.border,color:code.len
 </>
 )}
 <div style={{marginTop:16,paddingTop:14,borderTop:`1px solid ${B.border}`,textAlign:"center"}}>
-<button onClick={()=>{setMode("pin");setEmailError("");}} style={{background:"none",border:"none",color:B.muted,fontSize:10,fontFamily:"'Lexend',sans-serif",textDecoration:"underline",cursor:"pointer",padding:0}}>Trouble with email? Use a PIN instead</button>
+<button onClick={()=>{setMode("google");setEmailError("");}} style={{background:"none",border:"none",color:B.muted,fontSize:10,fontFamily:"'Lexend',sans-serif",textDecoration:"underline",cursor:"pointer",padding:0}}>Back to Sign in with Google</button>
 </div>
 </div>
-):(
-<>
-<div style={{marginBottom:14}}>
-<div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:2,marginBottom:7}}>SELECT USER</div>
-{loginUsers.length===0?(
-<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,padding:"12px",background:B.surface,borderRadius:6,border:`1px solid ${B.border}`,textAlign:"center",lineHeight:1.6}}>
-No users set up yet.<br/>
-<span style={{fontSize:10}}>Go to Settings → Sales Reps and set a PIN for each rep to grant access.</span>
-</div>
-):(
-<div style={{display:"flex",flexDirection:"column",gap:5}}>
-{loginUsers.map(u=>(
-<button key={u.id} onClick={()=>{setSel(u);setPin("");}}
-style={{background:sel?.id===u.id?`${u.color}10`:B.surface,border:`1px solid ${sel?.id===u.id?u.color:B.border}`,borderRadius:6,padding:"9px 13px",display:"flex",alignItems:"center",gap:9,textAlign:"left"}}>
-<div style={{width:30,height:30,borderRadius:"50%",background:u.color,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>
-<span style={{fontFamily:"'Russo One',sans-serif",fontSize:10,color:B.white}}>{u.initials}</span>
-</div>
-<div>
-<div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,fontWeight:500}}>{u.name}</div>
-<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{u.email}</div>
-</div>
-</button>
-))}
-</div>
-)}
-</div>
-{sel&&(
-<div className={shake?"shk fu":"fu"} style={{marginBottom:14}}>
-<div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:2,marginBottom:5}}>PIN</div>
-<input type="password" value={pin} onChange={e=>setPin(e.target.value)} onKeyDown={e=>e.key==="Enter"&&doLogin()}
-placeholder="••••" maxLength={4}
-style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:5,padding:"10px 12px",fontSize:15,letterSpacing:6,textAlign:"center"}}/>
-</div>
-)}
-<button onClick={doLogin} disabled={!sel||pin.length<4||loading}
-style={{width:"100%",background:sel&&pin.length>=4?B.orange:B.border,color:sel&&pin.length>=4?B.white:B.muted,border:"none",borderRadius:6,padding:"11px",fontFamily:"'Russo One',sans-serif",fontSize:13,letterSpacing:.5}}>
-{loading?"CHECKING…":"SIGN IN →"}
-</button>
-<div style={{marginTop:16,paddingTop:14,borderTop:`1px solid ${B.border}`,textAlign:"center"}}>
-<button onClick={()=>setMode("email")} style={{background:"none",border:"none",color:B.muted,fontSize:10,fontFamily:"'Lexend',sans-serif",textDecoration:"underline",cursor:"pointer",padding:0}}>Use your email instead</button>
-</div>
-</>
 )}
 {/* Admin bypass — only visible when no admin accounts are set up */}
 {!appUsers.some(au=>au.isAdmin)&&(
@@ -11591,7 +11570,7 @@ return(<>
 <div style={{flex:1}}>
 {rep.gmailEnvKey
 ?<span style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text}}>Sending from <strong>{rep.name}</strong>'s Gmail ({rep.email||rep.gmailEnvKey})</span>
-:<span style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text}}>⚠️ <strong>{rep.name}</strong> has no personal Gmail configured. <a href="#settings" onClick={()=>setMod("settings")} style={{color:B.blue}}>Set a Gmail Key in Settings</a>, then have {rep.name.split(" ")[0]} open <a href={rep.gmailEnvKey?`/api/gmail-setup?repKey=${rep.gmailEnvKey}&hint=${encodeURIComponent(rep.email||"")}`:"/api/gmail-setup"} target="_blank" rel="noreferrer" style={{color:B.blue,fontWeight:600}}>this link on their own computer →</a></span>
+:<span style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text}}>⚠️ <strong>{rep.name}</strong> has no personal Gmail configured. Have {rep.name.split(" ")[0]} sign in to Rev-Ops with Google once; that connects their Gmail.</span>
 }
 </div>
 <button onClick={testGmailConn} style={{background:"none",border:`1px solid ${B.blue}40`,borderRadius:3,padding:"2px 7px",fontSize:9,fontFamily:"'Lexend',sans-serif",color:B.blue,cursor:"pointer",whiteSpace:"nowrap"}}>TEST GMAIL</button>
@@ -11783,7 +11762,7 @@ const newScheduledBatches={...(selCamp.scheduledBatches||{}),...campBatches};
 dispatch("UPDATE_CAMPAIGN",{id:selCamp.id,scheduledBatches:newScheduledBatches,sentBatches:updSentBatches});
 const _uc=(s.campaigns||[]).map(c=>c.id===selCamp.id?{...c,scheduledBatches:newScheduledBatches,sentBatches:updSentBatches}:c);
 const{currentUserId:_cid,contacts:_cc,agentHistory:_ah,..._ts}={...s,campaigns:_uc};
-fetch("/api/state",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({state:_ts})}).catch(()=>{});
+fetch("/api/state",{method:"POST",headers:{"Content-Type":"application/json",...sessionHeaders()},body:JSON.stringify({state:_ts})}).catch(()=>{});
 };
 const handleScheduleClick=()=>{
 setSchedStatus('applying');
@@ -11997,7 +11976,7 @@ const newScheduledBatches2={...(selCamp.scheduledBatches||{}),...campBatches};
 dispatch("UPDATE_CAMPAIGN",{id:selCamp.id,scheduledBatches:newScheduledBatches2,sentBatches:updSentBatches2});
 const _uc2=(s.campaigns||[]).map(c=>c.id===selCamp.id?{...c,scheduledBatches:newScheduledBatches2,sentBatches:updSentBatches2}:c);
 const{currentUserId:_cid2,contacts:_cc2,agentHistory:_ah2,..._ts2}={...s,campaigns:_uc2};
-fetch("/api/state",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({state:_ts2})}).catch(()=>{});
+fetch("/api/state",{method:"POST",headers:{"Content-Type":"application/json",...sessionHeaders()},body:JSON.stringify({state:_ts2})}).catch(()=>{});
 };
 const handleSchedClick=()=>{setSchedStatus('applying');setTimeout(()=>{applySchedule();setSchedStatus('done');setTimeout(()=>setSchedStatus(null),2500);},120);};
 const clearSchedule=()=>{
@@ -12142,7 +12121,7 @@ const ns2={...(fc.sentBatches||{})};delete ns2[batchKey];
 dispatch("UPDATE_CAMPAIGN",{...fc,scheduledBatches:ns,sentBatches:ns2});
 const _uc=(campaignsRef.current||[]).map(c=>c.id===selCamp.id?{...c,scheduledBatches:ns,sentBatches:ns2}:c);
 const{currentUserId:_cid,contacts:_cc,agentHistory:_ah,..._ts}={...s,campaigns:_uc};
-fetch("/api/state",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({state:_ts})}).catch(()=>{});
+fetch("/api/state",{method:"POST",headers:{"Content-Type":"application/json",...sessionHeaders()},body:JSON.stringify({state:_ts})}).catch(()=>{});
 }} style={{background:B.orange,color:B.white,border:"none",borderRadius:4,padding:"6px 12px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,fontWeight:700,cursor:"pointer",whiteSpace:"nowrap"}}>
 ↺ RESEND AT 9AM MT
 </button>
@@ -14521,7 +14500,7 @@ setInfo(d);
 setChecking(false);
 },[repKey]);
 React.useEffect(()=>{check();},[check]);
-const setupUrl = `/api/gmail-setup?repKey=${repKey}${email?`&hint=${encodeURIComponent(email)}`:""}`;
+const setupUrl = "/api/auth/google?consent=1";
 if (checking) return <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted}}>Checking…</div>;
 if (!info) return null;
 if (info.found && info.email) return (
@@ -14768,8 +14747,6 @@ const {s,dispatch,toast,setMod,cu}=useApp();
 const [ints,setInts]=useState({...(s.integrations||{})});
 const [co,setCo]=useState({...SEED.company,...(s.company||{})});
 const [repForm,setRepForm]=useState(null);
-const [pinForm,setPinForm]=useState(null);
-const [pinVal,setPinVal]=useState("");
 const [gmailStatus,setGmailStatus]=useState(null);
 const [gmailInfo,setGmailInfo]=useState(null);
 const [gmailChecking,setGmailChecking]=useState(false);
@@ -14785,9 +14762,9 @@ const fromLabel = rep.gmailEnvKey ? `${rep.gmailEnvKey}'s Gmail` : "shared Gmail
 if(rep.gmailEnvKey){
 try{
 const dbg=await fetch("/api/gmail",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"debug",repEnvKey:rep.gmailEnvKey})}).then(r=>r.json());
-if(!dbg.found){toast(`No Gmail connected for ${rep.name} — have them visit /api/gmail-setup?repKey=${rep.gmailEnvKey} from their own browser to connect`,"error");return;}
+if(!dbg.found){toast(`No Gmail connected for ${rep.name} — have them sign in to Rev-Ops with Google`,"error");return;}
 if(dbg.email&&dbg.email!==rep.email){
-toast(`Wrong account: ${rep.gmailEnvKey} is connected as ${dbg.email}, not ${rep.email}. Have ${rep.name} redo the OAuth at /api/gmail-setup?repKey=${rep.gmailEnvKey} from their own browser`,"error");
+toast(`Wrong account: ${rep.gmailEnvKey} is connected as ${dbg.email}, not ${rep.email}. Have ${rep.name} sign out and sign in with Google as ${rep.email}`,"error");
 return;
 }
 }catch{}
@@ -14805,14 +14782,8 @@ if(d.sent) toast(`Test sent to ${rep.email} via ${fromLabel} ✓`,"success");
 else toast("Send failed: "+(d.error||JSON.stringify(d)),"error");
 } catch(e){ toast("Error: "+e.message,"error"); }
 };
-const savePin=()=>{
-if(pinVal.length!==4||!/^\d{4}$/.test(pinVal)){toast("PIN must be exactly 4 digits","error");return;}
-const existingAu=(s.appUsers||[]).find(u=>u.repId===pinForm)||{};
-dispatch("SET_APP_USER",{...existingAu,repId:pinForm,pin:pinVal});
-toast("PIN saved — rep can now log in","success");
-setPinForm(null);setPinVal("");
-};
 const revokeAccess=(rep)=>{
+if(!sessionHeaders().Authorization){toast("Sign out and sign in with Google to change access","error");return;}
 if(!window.confirm(`Remove login access for ${rep.name}?`)) return;
 dispatch("DEL_APP_USER",rep.id);
 toast(`Access revoked for ${rep.name}`,"success");
@@ -14883,7 +14854,7 @@ if (cu?.isAdmin) { checkGmail(); checkPubler(); }
 if (cu && !cu.isAdmin) {
 const myRep = (s.reps||[]).find(r=>r.id===cu?.id) || cu;
 const myKey = cu?.gmailEnvKey || "";
-const setupUrl = myKey ? `/api/gmail-setup?repKey=${myKey}${cu?.email?`&hint=${encodeURIComponent(cu.email)}`:""}` : "";
+const setupUrl = "/api/auth/google?consent=1";
 return (
 <div style={{padding:"22px 26px",maxWidth:600}}>
 <PH title="MY ACCOUNT" sub={`Logged in as ${cu?.name||"you"}`}/>
@@ -14976,7 +14947,7 @@ const d=await fetch("/api/gmail",{method:"POST",headers:{"Content-Type":"applica
 if(d.sent) toast("Test email sent — check your inbox","success");
 else toast("Send failed: "+(d.error||JSON.stringify(d)),"error");
 }} style={{background:B.purple,color:B.white,border:"none",borderRadius:3,padding:"2px 8px",fontSize:9,fontFamily:"'Lexend',sans-serif",cursor:"pointer"}}>✉ Send Test</button>}
-{repGmailKey&&<a href={`/api/gmail-setup?repKey=${repGmailKey}${cu?.email?`&hint=${encodeURIComponent(cu.email)}`:""}`} target="_blank" rel="noreferrer" style={{background:B.orange,color:B.white,border:"none",borderRadius:3,padding:"2px 8px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",cursor:"pointer",textDecoration:"none"}}>Connect Gmail →</a>}
+{repGmailKey&&<a href="/api/auth/google?consent=1" style={{background:B.orange,color:B.white,border:"none",borderRadius:3,padding:"2px 8px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",cursor:"pointer",textDecoration:"none"}}>Connect Gmail →</a>}
 </div>
 </div>
 {/* Rep (non-admin) with no gmailEnvKey set */}
@@ -15167,11 +15138,7 @@ style={{width:"100%",background:B.white,border:`1px solid ${B.border}`,color:B.t
 <input type="text" value={repForm.gmailEnvKey||""} onChange={e=>setRepForm(f=>({...f,gmailEnvKey:e.target.value.toUpperCase().replace(/[^A-Z0-9_]/g,"")}))}
 placeholder="e.g. JOSH" maxLength={20}
 style={{width:120,background:B.white,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 9px",fontSize:12,fontFamily:"'Lexend',sans-serif",letterSpacing:1}}/>
-{repForm.gmailEnvKey
-?<a href={`/api/gmail-setup?repKey=${repForm.gmailEnvKey}`} target="_blank" rel="noreferrer"
-style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.blue,textDecoration:"underline",whiteSpace:"nowrap"}}>Gmail setup link →</a>
-:<span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>Type a key above, then click the setup link</span>}
-{repForm.gmailEnvKey&&<span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,whiteSpace:"nowrap"}}>Save, then have the rep open this link on their own computer. Token saves automatically.</span>}
+<span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>Filled in automatically when the rep signs in with Google, which connects their Gmail.</span>
 </div>
 </div>
 </div>
@@ -15188,8 +15155,9 @@ const hasAccess = (s.appUsers||[]).some(u=>u.repId===rep.id);
 const repAu = (s.appUsers||[]).find(u=>u.repId===rep.id);
 const isRepAdmin = repAu?.isAdmin||false;
 const toggleRepAdmin=()=>{
-if(!repAu){toast("Set a PIN first before granting admin access","error");return;}
-dispatch("SET_APP_USER",{...repAu,isAdmin:!isRepAdmin});
+// Admin changes are saved only from a signed-in admin's session (server-side check).
+if(!sessionHeaders().Authorization){toast("Sign out and sign in with Google to change admin access","error");return;}
+dispatch("SET_APP_USER",{...(repAu||{}),repId:rep.id,isAdmin:!isRepAdmin});
 toast(!isRepAdmin?`${rep.name} granted admin access`:`${rep.name} admin access removed`,"success");
 };
 const hasOwnGmail = !!rep.gmailEnvKey;
@@ -15205,30 +15173,19 @@ return(
 {hasAccess&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.green,background:`${B.green}15`,padding:"1px 5px",borderRadius:3,letterSpacing:.5}}>HAS ACCESS</span>}
 {hasOwnGmail
 ? <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.blue,background:B.blueBg,padding:"1px 5px",borderRadius:3,letterSpacing:.5}}>✉ OWN GMAIL ({rep.gmailEnvKey})</span>
-: <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.muted,background:B.surface,padding:"1px 5px",borderRadius:3,letterSpacing:.5}}>✉ SHARED GMAIL</span>
+: <span title="Connects when this rep signs in with Google" style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.muted,background:B.surface,padding:"1px 5px",borderRadius:3,letterSpacing:.5}}>✉ NOT CONNECTED · SIGNS IN WITH GOOGLE</span>
 }
 </div>
 <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{rep.email}{rep.title?` · ${rep.title}`:""}{rep.phone?` · ${rep.phone}`:""}</div>
 </div>
 <div style={{display:"flex",gap:5}}>
 <button onClick={()=>testRepEmail(rep)} style={{background:"none",border:`1px solid ${B.border}`,borderRadius:4,padding:"3px 8px",fontSize:9,fontFamily:"'Lexend',sans-serif",color:B.blue,cursor:"pointer"}} title={hasOwnGmail?`Send test from ${rep.gmailEnvKey}'s Gmail`:"Send test from shared Gmail"}>✉ TEST</button>
-{hasOwnGmail&&<a href={`/api/gmail-setup?repKey=${rep.gmailEnvKey}${rep.email?`&hint=${encodeURIComponent(rep.email)}`:""}`} target="_blank" rel="noreferrer" style={{background:"none",border:`1px solid ${B.blue}40`,borderRadius:4,padding:"3px 8px",fontSize:9,fontFamily:"'Lexend',sans-serif",color:B.blue,cursor:"pointer",textDecoration:"none"}}>GMAIL SETUP →</a>}
-<button onClick={()=>{if(pinForm===rep.id){setPinForm(null);setPinVal("");}else{setPinForm(rep.id);setPinVal("");}}} style={{background:hasAccess?`${B.green}15`:"none",border:`1px solid ${hasAccess?B.green:B.border}`,borderRadius:4,padding:"3px 8px",fontSize:9,fontFamily:"'Lexend',sans-serif",color:hasAccess?B.green:B.muted,cursor:"pointer"}} title={hasAccess?"Change or revoke PIN":"Set login PIN for this rep"}>{hasAccess?"🔑 CHANGE PIN":"🔑 SET PIN"}</button>
-{hasAccess&&<button onClick={toggleRepAdmin} style={{background:isRepAdmin?B.purpleBg:"none",border:`1px solid ${isRepAdmin?`${B.purple}40`:B.border}`,borderRadius:4,padding:"3px 8px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",color:isRepAdmin?B.purple:B.muted,cursor:"pointer"}} title={isRepAdmin?"Remove admin access":"Grant admin access to this rep"}>◐ {isRepAdmin?"ADMIN":"MAKE ADMIN"}</button>}
+{hasAccess&&<button onClick={()=>revokeAccess(rep)} style={{background:"none",border:`1px solid ${B.red}40`,borderRadius:4,padding:"3px 8px",fontSize:9,fontFamily:"'Lexend',sans-serif",color:B.red,cursor:"pointer"}} title="Signs this rep out of Rev-Ops until they sign in with Google again">REVOKE</button>}
+{<button onClick={toggleRepAdmin} style={{background:isRepAdmin?B.purpleBg:"none",border:`1px solid ${isRepAdmin?`${B.purple}40`:B.border}`,borderRadius:4,padding:"3px 8px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",color:isRepAdmin?B.purple:B.muted,cursor:"pointer"}} title={isRepAdmin?"Remove admin access":"Grant admin access to this rep"}>◐ {isRepAdmin?"ADMIN":"MAKE ADMIN"}</button>}
 <button onClick={()=>setRepForm({...rep})} style={{background:"none",border:`1px solid ${B.border}`,borderRadius:4,padding:"3px 8px",fontSize:9,fontFamily:"'Lexend',sans-serif",color:B.muted,cursor:"pointer"}}>EDIT</button>
 <button onClick={()=>{if(window.confirm(`Remove ${rep.name}?`))dispatch("DEL_REP",rep.id);}} style={{background:B.redBg,border:`1px solid ${B.red}30`,borderRadius:4,padding:"3px 8px",fontSize:9,fontFamily:"'Lexend',sans-serif",color:B.red,cursor:"pointer"}}>DEL</button>
 </div>
 </div>
-{pinForm===rep.id&&(
-<div style={{background:B.surface,borderTop:`1px solid ${B.border}`,padding:"10px 12px",display:"flex",alignItems:"center",gap:8}}>
-<div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:2,whiteSpace:"nowrap"}}>SET 4-DIGIT PIN</div>
-<input type="password" value={pinVal} onChange={e=>setPinVal(e.target.value.replace(/\D/g,"").slice(0,4))} onKeyDown={e=>e.key==="Enter"&&savePin()} placeholder="••••" maxLength={4}
-style={{width:80,background:B.white,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"5px 8px",fontSize:14,letterSpacing:6,textAlign:"center",fontFamily:"'Lexend',sans-serif"}}/>
-<button onClick={savePin} disabled={pinVal.length!==4} style={{background:pinVal.length===4?B.orange:B.border,color:pinVal.length===4?B.white:B.muted,border:"none",borderRadius:4,padding:"5px 10px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,cursor:pinVal.length===4?"pointer":"not-allowed"}}>SAVE</button>
-{hasAccess&&<button onClick={()=>revokeAccess(rep)} style={{background:B.redBg,border:`1px solid ${B.red}30`,borderRadius:4,padding:"5px 10px",fontSize:9,fontFamily:"'Lexend',sans-serif",color:B.red,cursor:"pointer"}}>REVOKE ACCESS</button>}
-<button onClick={()=>{setPinForm(null);setPinVal("");}} style={{background:"none",border:`1px solid ${B.border}`,borderRadius:4,padding:"5px 10px",fontSize:9,fontFamily:"'Lexend',sans-serif",color:B.muted,cursor:"pointer"}}>CANCEL</button>
-</div>
-)}
 </div>
 );
 })}

@@ -13,6 +13,7 @@
  */
 
 import { prisma } from './_lib/prisma.js';
+import { connectedRefreshTokenForKey } from './_lib/repGmailToken.js';
 import { classifyEmailIntent } from './_lib/brad-shared.js';
 import { encodeMimeWord, encodeMailbox, encodeFilename } from './_lib/mimeHeader.js';
 
@@ -32,9 +33,10 @@ async function getToken(repEnvKey = "") {
     throw new Error("Gmail not configured — set GMAIL_CLIENT_ID and GMAIL_CLIENT_SECRET in Vercel env vars");
   }
 
-  // Look up refresh token: database first, then env var (backwards compat)
-  let refreshToken = null;
-  if (repEnvKey) {
+  // Look up refresh token: the rep's Google sign-in connection, then the older per-rep
+  // database token, then env var (backwards compat).
+  let refreshToken = repEnvKey ? await connectedRefreshTokenForKey(repEnvKey) : null;
+  if (repEnvKey && !refreshToken) {
     try {
       const dbKey = `gmail_token_${repEnvKey.toUpperCase().replace(/[^A-Z0-9]/g, "_")}`;
       const row = await prisma.setting.findUnique({ where: { key: dbKey } });
@@ -47,7 +49,7 @@ async function getToken(repEnvKey = "") {
       : "GMAIL_REFRESH_TOKEN";
     refreshToken = process.env[refreshTokenVar];
     if (!refreshToken) {
-      if (repEnvKey) throw new Error(`Gmail not configured for "${repEnvKey}" — connect Gmail in your account settings`);
+      if (repEnvKey) throw new Error(`Gmail not connected for "${repEnvKey}" — have that rep sign in with Google`);
       throw new Error("Gmail not configured — visit /api/gmail-setup");
     }
   }
