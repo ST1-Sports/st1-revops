@@ -68,6 +68,8 @@ const IntegrationsPage = lazy(() => import('./Integrations.jsx'))
 const TeamStoresPage = lazy(() => import('./TeamStores.jsx'))
 const FlagshipStorePage = lazy(() => import('./FlagshipStore.jsx'))
 const BulkOutreachPage = lazy(() => import('./BulkOutreach.jsx'))
+const FollowUpRadarPage = lazy(() => import('./FollowUpRadar.jsx'))
+const RadarInboxCard = lazy(() => import('./RadarInboxCard.jsx'))
 const TeamStoreStatementPage = lazy(() => import('./TeamStoreStatement.jsx'))
 const TeamStoreReconcilePage = lazy(() => import('./TeamStoreReconcile.jsx'))
 function usePrefetchPanels() {
@@ -1088,6 +1090,7 @@ if (window.history.length > 1) navigate(-1);
 else navigate("/");
 }, [navigate, location.pathname, location.search]);
 const [slim, setSlim] = useState(false);
+const [radarOwes, setRadarOwes] = useState(0);
 const [mobileNavOpen, setMobileNavOpen] = useState(false);
 const [expandedGroups, setExpandedGroups] = useState(new Set());
 const toggleGroup = (id) => setExpandedGroups(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; });
@@ -1128,6 +1131,11 @@ const initials = (rep.name||"?").split(" ").map(w=>w[0]).join("").slice(0,2).toU
 const appUser = (s.appUsers||[]).find(u=>u.repId===s.currentUserId);
 return { ...rep, initials, color: B.blue, role: rep.title || "rep", isAdmin: appUser?.isAdmin || false };
 })();
+useEffect(()=>{
+if(!s.currentUserId) return;
+fetch(`/api/radar/items?userId=${encodeURIComponent(s.currentUserId)}&counts=1`)
+.then(r=>r.json()).then(d=>setRadarOwes(Number(d.owesReply)||0)).catch(()=>{});
+},[s.currentUserId,mod]);
 const crmSyncRef = useRef(null);
 const ctx = {s, dispatch, toast, cu, mod, setMod, goBack, crmSyncRef, lastSynced, syncing, pullFromServer};
 useEffect(()=>{
@@ -1353,6 +1361,7 @@ const NAV = useMemo(()=>[
 {id:"briefing",    icon:"⌂", label:"Home",            badge:urgentCount(s)},
 {id:"analytics",   icon:"▣", label:"Analytics"},
 {id:"crm",           icon:"◈", label:"CRM"},
+{id:"follow-up-radar", icon:"📡", label:"Follow-Up Radar", badge:radarOwes},
 {id:"sponsorships",  icon:"★", label:"Sponsorships",  badge:(s.contacts||[]).filter(c=>c.sponsorshipStatus==="proposed").length||0},
 {id:"_s_growth"},
 {id:"prospecting", icon:"⊕", label:"Prospecting"},
@@ -1377,7 +1386,7 @@ const NAV = useMemo(()=>[
 {id:"settings",      icon:"⚙", label:"Settings"},
 {id:"integrations",  icon:"⚡", label:"Integrations"},
 ...(cu?.isAdmin ? [{id:"admin", icon:"◐", label:"Admin Panel"}] : []),
-],[s.reorders,s.deals,s.rfps,cu?.isAdmin]);
+],[s.reorders,s.deals,s.rfps,cu?.isAdmin,radarOwes]);
 usePrefetchPanels();
 function EdgarSidebarWidget() {
 const {dispatch:d2}=useApp();
@@ -1621,6 +1630,7 @@ animation:syncing?"pulse 1s infinite":undefined}}/>
 <ErrBound key={mod}>
 {mod==="analytics"   && <ModAnalytics/>}
 {mod==="crm"          && <ModCRM/>}
+{mod==="follow-up-radar" &&<Suspense fallback={<PanelLoader/>}><FollowUpRadarPage s={s} dispatch={dispatch} toast={toast} cu={cu} setMod={setMod}/></Suspense>}
 {mod==="sponsorships" && <ModSponsorships/>}
 {mod==="deals"        && <ModDeals/>}
 {mod==="orders"      && <ModOrders/>}
@@ -15769,6 +15779,7 @@ No Gmail key assigned to your account. Ask an admin to set your Gmail Key in Set
 <RepGmailConnector repKey={myKey} email={cu?.email||""} name={cu?.name||""} />
 )}
 </div>
+<Suspense fallback={null}><RadarInboxCard userId={cu?.id||s.currentUserId} isAdmin={false}/></Suspense>
 </div>
 );
 }
@@ -15792,6 +15803,7 @@ style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B
 </div>
 <OBtn onClick={save}>SAVE SETTINGS</OBtn>
 </div>
+<Suspense fallback={null}><RadarInboxCard userId={cu?.id||s.currentUserId} isAdmin={!!cu?.isAdmin}/></Suspense>
 {/* BCC-to-Deal Email Tracking */}
 <div className="card" style={{padding:16,marginBottom:13,borderTop:`3px solid ${B.blue}`}}>
 <Lbl c={B.blue} s={{marginBottom:6}}>BCC-to-Deal Tracking</Lbl>
