@@ -7,7 +7,9 @@
  */
 import { setCors } from './_lib/cors.js'
 import { prisma }  from './_lib/prisma.js'
-import { notifyBradSlack, notifyBradEmail } from './_lib/brad-shared.js'
+import { notifyBradSlack } from './_lib/brad-shared.js'
+import { handOffBradReply } from './_lib/radar/brad.js'
+import { isBradFollowUpReply } from './_lib/junkReply.js'
 
 export default async function handler(req, res) {
   setCors(res, 'GET, POST, OPTIONS')
@@ -16,11 +18,12 @@ export default async function handler(req, res) {
   if (req.method === 'GET') {
     try {
       const rows = await prisma.agentInteraction.findMany({
-        where: { agentId: 'brad', action: 'reply_intent' },
+        where: { agentId: 'brad', action: 'reply_intent', outcome: 'pending' },
         orderBy: { createdAt: 'desc' },
         take: 50,
       })
-      return res.json({ replies: rows })
+      // Display-only filter: never rewrite stored rows from a GET, so a matcher fix restores them.
+      return res.json({ replies: rows.filter(isBradFollowUpReply) })
     } catch (err) {
       return res.status(500).json({ error: err.message })
     }
@@ -52,17 +55,26 @@ export default async function handler(req, res) {
       const out = row.output || {}
       const assigned = { name: out.assignedName || 'Matt Stone', email: out.assignedTo || 'matt@st1sports.com' }
       const slack = await notifyBradSlack(assigned, inp.contactName || inp.fromEmail, inp.fromEmail, inp.subject, inp.snippet)
-      let email = { ok: out.email === 'sent' }
-      if (out.email !== 'sent') {
-        email = await notifyBradEmail(req.headers.host, assigned, inp.contactName || inp.fromEmail, inp.fromEmail, inp.subject, inp.snippet)
-      }
+      const radar = await handOffBradReply(req.headers.host, {
+        assigned,
+        fromEmail: inp.fromEmail,
+        contactName: inp.contactName || inp.fromEmail,
+        subject: inp.subject,
+        bodyText: inp.snippet,
+      })
       const output = {
         ...out,
         slack: slack?.ok ? 'sent' : (slack?.error || 'failed'),
-        email: (email?.ok || out.email === 'sent') ? 'sent' : (email?.error || out.email || 'failed'),
+        radar: radar?.ok ? radar.followUpItemId : (radar?.error || 'failed'),
+        email: radar?.email,
       }
       await prisma.agentInteraction.update({ where: { id }, data: { output } })
-      return res.json({ ok: !!(slack?.ok && (email?.ok || out.email === 'sent')), slack: output.slack, email: output.email })
+      return res.json({
+        ok: !!(slack?.ok && (radar?.ok || radar?.email === 'sent')),
+        slack: output.slack,
+        radar: output.radar,
+        email: output.email,
+      })
     } catch (err) {
       return res.status(500).json({ error: err.message })
     }

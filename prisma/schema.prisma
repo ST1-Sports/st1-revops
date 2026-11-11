@@ -940,3 +940,120 @@ model SettlementMatch {
   @@index([status])
   @@index([direction])
 }
+
+// ── FOLLOW-UP RADAR ──────────────────────────────────────────────────────────
+// Per-rep Gmail inbox connection (gmail.readonly + gmail.compose — never gmail.send).
+// Refresh tokens are AES-256-GCM encrypted with RADAR_TOKEN_KEY / TOKEN_ENCRYPTION_KEY.
+
+model InboxConnection {
+  id                    String    @id @default(cuid())
+  userId                String
+  provider              String    @default("gmail")
+  email                 String
+  encryptedRefreshToken String    @db.Text
+  scopes                String
+  historyId             String?
+  lastSyncAt            DateTime?
+  status                String    @default("active") // active | error | disconnected | syncing
+  backfillDays          Int       @default(120)
+  syncCursor            Json?
+  styleProfile          Json?
+  styleProfileAt        DateTime?
+  lastError             String?
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+  threads               ThreadSnapshot[]
+  followUps             FollowUpItem[]
+
+  @@unique([userId, provider])
+  @@index([userId])
+  @@index([status])
+  @@index([email])
+}
+
+model ThreadSnapshot {
+  id            String    @id @default(cuid())
+  connectionId  String
+  connection    InboxConnection @relation(fields: [connectionId], references: [id], onDelete: Cascade)
+  userId        String
+  threadId      String
+  subject       String?
+  participants  Json      @default("[]")
+  lastMessageAt DateTime?
+  lastMessageId String?
+  hash          String
+  filterReason  String?   // null when the thread passed hard filters
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  @@unique([userId, threadId])
+  @@index([userId])
+  @@index([connectionId])
+  @@index([lastMessageAt])
+}
+
+model FollowUpItem {
+  id                 String    @id @default(cuid())
+  userId             String
+  connectionId       String?
+  connection         InboxConnection? @relation(fields: [connectionId], references: [id], onDelete: SetNull)
+  threadId           String
+  bucket             String    // owes_reply | awaiting_them | closed_won | closed_lost | fulfillment
+  status             String    @default("open") // open | snoozed | closed_won | closed_lost
+  contactName        String?
+  contactEmail       String?
+  organization       String?
+  orgType            String?   // school | little_league | club | partner | other
+  intentScore        Int       @default(0)
+  dealContext        String?
+  openCommitments    Json      @default("[]")
+  lastTouchAt        DateTime?
+  lastTouchBy        String?   // us | them
+  daysSinceLastTouch Int?
+  suggestedNextStep  String?
+  snoozedUntil       DateTime?
+  dealId             String?
+  dealStage          String?
+  gmailPermalink     String?
+  needsInput         Boolean   @default(false)
+  source             String    @default("sync") // sync | brad
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+  drafts             DraftLog[]
+
+  @@unique([userId, threadId])
+  @@index([userId, bucket, status])
+  @@index([userId, contactEmail])
+  @@index([connectionId])
+}
+
+model DraftLog {
+  id             String        @id @default(cuid())
+  followUpItemId String
+  followUpItem   FollowUpItem  @relation(fields: [followUpItemId], references: [id], onDelete: Cascade)
+  gmailDraftId   String?
+  body           String        @db.Text
+  needsInput     Boolean       @default(false)
+  createdAt      DateTime      @default(now())
+  sentDetectedAt DateTime?
+
+  @@index([followUpItemId])
+  @@index([gmailDraftId])
+}
+
+model RadarVendorDomain {
+  domain    String   @id
+  source    String   @default("manual") // manual | zoho
+  createdAt DateTime @default(now())
+}
+
+model RadarProgramHook {
+  id        String    @id @default(cuid())
+  title     String
+  body      String
+  keywords  Json      @default("[]")
+  active    Boolean   @default(true)
+  expiresAt DateTime?
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+}

@@ -58,8 +58,10 @@ import {
   quoteNotesFromDescription,
 } from "../lib/quoteLines.js";
 import { fetchAllAreaContactIds, createOutreachBatchFromIds, listNameForArea, outreachPathForBatch } from "../lib/prospectingOutreach.js";
+import { isBradFollowUpReply } from "../lib/junkReply.js";
 import { COACH_ROLES } from "../../api/_lib/roleUtils.js";
 import { internalAuthHeaders } from "../lib/internalAuth.js";
+import { radarFetch, saveSessionToken } from "../lib/session.js";
 const HOME_AGENT_NAME = "Scout";
 const CmdCenter      = lazy(() => import('./CommandCenter.jsx'))
 const ExpansionPage  = lazy(() => import('./Expansion.jsx'))
@@ -68,6 +70,8 @@ const IntegrationsPage = lazy(() => import('./Integrations.jsx'))
 const TeamStoresPage = lazy(() => import('./TeamStores.jsx'))
 const FlagshipStorePage = lazy(() => import('./FlagshipStore.jsx'))
 const BulkOutreachPage = lazy(() => import('./BulkOutreach.jsx'))
+const FollowUpRadarPage = lazy(() => import('./FollowUpRadar.jsx'))
+const RadarInboxCard = lazy(() => import('./RadarInboxCard.jsx'))
 const TeamStoreStatementPage = lazy(() => import('./TeamStoreStatement.jsx'))
 const TeamStoreReconcilePage = lazy(() => import('./TeamStoreReconcile.jsx'))
 function usePrefetchPanels() {
@@ -1080,6 +1084,7 @@ if (window.history.length > 1) navigate(-1);
 else navigate("/");
 }, [navigate, location.pathname, location.search]);
 const [slim, setSlim] = useState(false);
+const [radarOwes, setRadarOwes] = useState(0);
 const [mobileNavOpen, setMobileNavOpen] = useState(false);
 const [expandedGroups, setExpandedGroups] = useState(new Set());
 const toggleGroup = (id) => setExpandedGroups(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; });
@@ -1120,6 +1125,11 @@ const initials = (rep.name||"?").split(" ").map(w=>w[0]).join("").slice(0,2).toU
 const appUser = (s.appUsers||[]).find(u=>u.repId===s.currentUserId);
 return { ...rep, initials, color: B.blue, role: rep.title || "rep", isAdmin: appUser?.isAdmin || false };
 })();
+useEffect(()=>{
+if(!s.currentUserId) return;
+radarFetch("/api/radar/items?counts=1")
+.then(r=>r.json()).then(d=>setRadarOwes(Number(d.owesReply)||0)).catch(()=>{});
+},[s.currentUserId,mod]);
 const crmSyncRef = useRef(null);
 const ctx = {s, dispatch, toast, cu, mod, setMod, goBack, crmSyncRef, lastSynced, syncing, pullFromServer};
 useEffect(()=>{
@@ -1345,6 +1355,7 @@ const NAV = useMemo(()=>[
 {id:"briefing",    icon:"⌂", label:"Home",            badge:urgentCount(s)},
 {id:"analytics",   icon:"▣", label:"Analytics"},
 {id:"crm",           icon:"◈", label:"CRM"},
+{id:"follow-up-radar", icon:"📡", label:"Follow-Up Radar", badge:radarOwes},
 {id:"sponsorships",  icon:"★", label:"Sponsorships",  badge:(s.contacts||[]).filter(c=>c.sponsorshipStatus==="proposed").length||0},
 {id:"_s_growth"},
 {id:"prospecting", icon:"⊕", label:"Prospecting"},
@@ -1368,7 +1379,7 @@ const NAV = useMemo(()=>[
 {id:"settings",      icon:"⚙", label:"Settings"},
 {id:"integrations",  icon:"⚡", label:"Integrations"},
 ...(cu?.isAdmin ? [{id:"admin", icon:"◐", label:"Admin Panel"}] : []),
-],[s.reorders,s.deals,s.rfps,cu?.isAdmin]);
+],[s.reorders,s.deals,s.rfps,cu?.isAdmin,radarOwes]);
 usePrefetchPanels();
 function EdgarSidebarWidget() {
 const {dispatch:d2}=useApp();
@@ -1505,13 +1516,13 @@ style={{width:"100%",background:mod===n.id?"rgba(243,115,33,0.15)":"transparent"
 <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:"#fff",fontWeight:500,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{cu?.name||s.currentUserId}</div>
 {cu&&<div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:6,color:"rgba(255,255,255,0.35)",letterSpacing:1}}>{(cu.role||"").toUpperCase()}</div>}
 </div>
-<button onClick={()=>dispatch("LOGOUT")} style={{background:"rgba(255,255,255,0.07)",border:"1px solid rgba(255,255,255,0.12)",color:"rgba(255,255,255,0.5)",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",letterSpacing:.5,padding:"3px 7px",borderRadius:4,cursor:"pointer"}}>OUT</button>
+<button onClick={()=>{saveSessionToken(null);dispatch("LOGOUT");}} style={{background:"rgba(255,255,255,0.07)",border:"1px solid rgba(255,255,255,0.12)",color:"rgba(255,255,255,0.5)",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",letterSpacing:.5,padding:"3px 7px",borderRadius:4,cursor:"pointer"}}>OUT</button>
 </div>}
 {s.currentUserId&&slim&&<div style={{padding:"8px 0",borderTop:"1px solid rgba(255,255,255,0.07)",display:"flex",flexDirection:"column",alignItems:"center",gap:4}}>
 {cu&&<div style={{width:26,height:26,borderRadius:"50%",background:cu.color,display:"flex",alignItems:"center",justifyContent:"center"}}>
 <span style={{fontFamily:"'Russo One',sans-serif",fontSize:9,color:B.white}}>{cu.initials}</span>
 </div>}
-<button onClick={()=>dispatch("LOGOUT")} style={{background:"rgba(255,255,255,0.07)",border:"1px solid rgba(255,255,255,0.12)",color:"rgba(255,255,255,0.4)",fontSize:7,fontFamily:"'Lexend Zetta',sans-serif",letterSpacing:.3,padding:"2px 5px",borderRadius:3,cursor:"pointer"}}>OUT</button>
+<button onClick={()=>{saveSessionToken(null);dispatch("LOGOUT");}} style={{background:"rgba(255,255,255,0.07)",border:"1px solid rgba(255,255,255,0.12)",color:"rgba(255,255,255,0.4)",fontSize:7,fontFamily:"'Lexend Zetta',sans-serif",letterSpacing:.3,padding:"2px 5px",borderRadius:3,cursor:"pointer"}}>OUT</button>
 </div>}
 </aside>
 {mobileNavOpen&&<div onClick={()=>setMobileNavOpen(false)} style={{position:"fixed",inset:0,background:"rgba(0,0,0,.5)",zIndex:49}}/>}
@@ -1612,6 +1623,7 @@ animation:syncing?"pulse 1s infinite":undefined}}/>
 <ErrBound key={mod}>
 {mod==="analytics"   && <ModAnalytics/>}
 {mod==="crm"          && <ModCRM/>}
+{mod==="follow-up-radar" &&<Suspense fallback={<PanelLoader/>}><FollowUpRadarPage s={s} dispatch={dispatch} toast={toast} cu={cu} setMod={setMod}/></Suspense>}
 {mod==="sponsorships" && <ModSponsorships/>}
 {mod==="deals"        && <ModDeals/>}
 {mod==="orders"      && <ModOrders/>}
@@ -1727,6 +1739,7 @@ if(d.ok){
 if(reps.some(x=>x.id===d.repId)) dispatch("UPDATE_REP",d.rep);
 else dispatch("ADD_REP",d.rep);
 dispatch("SET_APP_USER",d.appUser);
+saveSessionToken(d.sessionToken||null);
 dispatch("LOGIN",d.repId);
 }else{
 setEmailError(d.error||"Incorrect code");
@@ -4144,7 +4157,7 @@ const isLead=(contact.id||"").startsWith("zoho_l_");
 if(isLead){crmUpdate("Leads",contact.zohoId,{Company:school});}
 else{
 try{
-const r=await fetch("/api/crm/account-name",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({name:school,city,state})});
+const r=await fetch("/api/crm/account-name",{method:"POST",headers:{"Content-Type":"application/json",...internalAuthHeaders()},body:JSON.stringify({name:school,city,state})});
 const d=await r.json();
 if(d.ok)crmUpdate("Contacts",contact.zohoId,{Account_Name:{id:d.accountId}});
 }catch{}
@@ -4365,7 +4378,7 @@ accountId=sel.zohoAccountId;
 // Contacts' Account_Name is a lookup field — sending the school name as a
 // bare string here wouldn't actually link it, same issue as Deals/Quotes
 // had before those were fixed to resolve a real Account id first.
-const r=await fetch("/api/crm/account-name",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({name:pf.school,city:pf.city,state:pf.state})});
+const r=await fetch("/api/crm/account-name",{method:"POST",headers:{"Content-Type":"application/json",...internalAuthHeaders()},body:JSON.stringify({name:pf.school,city:pf.city,state:pf.state})});
 const d=await r.json();
 if(d.ok){accountId=d.accountId;dispatch("UPDATE_CONTACT",{id:sel.id,zohoAccountId:accountId,profileSavedAt:Date.now()});}
 }
@@ -4646,6 +4659,10 @@ if(addForm.lastName&&orgTypeConfig(addAccountForm.orgType).requireContactTitle&&
 savingContactRef.current=true;
 const a={id:mkId(),name:addAccountForm.name.trim(),domain:addAccountForm.domain.trim(),orgType:addAccountForm.orgType,createdAt:Date.now()};
 dispatch("ADD_ACCOUNT",a);
+// Create (or link) the real Zoho CRM Account right away, as rename/enrich already do.
+fetch("/api/crm/account-name",{method:"POST",headers:{"Content-Type":"application/json",...internalAuthHeaders()},body:JSON.stringify({name:a.name,website:a.domain||undefined})})
+.then(r=>r.json()).then(d=>{if(d.ok&&d.accountId)dispatch("UPDATE_ACCOUNT",{id:a.id,zohoAccountId:d.accountId});else toast(`${a.name} saved here, but Zoho: ${d.error||"not created"}`,"error");})
+.catch(()=>toast(`${a.name} saved here, but Zoho could not be reached`,"error"));
 const key=schoolKeyOf({school:a.name,state:""});
 setShowAddAccount(false);
 setAddAccountForm({name:"",domain:"",orgType:"school"});
@@ -4877,7 +4894,7 @@ const newName=accountNameInput.trim();
 if(!newName||newName===schoolCleanName){setEditingAccountName(false);return;}
 setSavingAccountName(true);
 try{
-const r=await fetch("/api/crm/account-name",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({name:newName,city,state})});
+const r=await fetch("/api/crm/account-name",{method:"POST",headers:{"Content-Type":"application/json",...internalAuthHeaders()},body:JSON.stringify({name:newName,city,state})});
 const d=await r.json();
 if(!d.ok){toast(d.error||"Could not resolve Zoho Account","error");setSavingAccountName(false);return;}
 schoolContacts.forEach(c=>{
@@ -4907,7 +4924,7 @@ if(!d.website){toast("Couldn't confidently find an official website","info");set
 // team on next load — not just this browser tab.
 schoolContacts.forEach(c=>dispatch("UPDATE_CONTACT",{id:c.id,website:d.website}));
 if(accountRecord) dispatch("UPDATE_ACCOUNT",{id:accountRecord.id,domain:d.website});
-try{await fetch("/api/crm/account-name",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({name:schoolCleanName,city,state,website:d.website})});}catch{}
+try{await fetch("/api/crm/account-name",{method:"POST",headers:{"Content-Type":"application/json",...internalAuthHeaders()},body:JSON.stringify({name:schoolCleanName,city,state,website:d.website})});}catch{}
 toast(`Found ${d.website} — saved to Zoho and shared account record`,"success");
 }catch(e){toast(`Enrich error: ${e.message}`,"error");}
 setEnrichingWebsite(false);
@@ -7827,7 +7844,7 @@ setBradRepliesLoading(true);
 try{
 const r=await fetch('/api/brad-replies');
 const d=await r.json();
-setBradReplies((d.replies||[]).filter(r=>r.outcome==='pending'));
+setBradReplies((d.replies||[]).filter(isBradFollowUpReply));
 }catch{}
 setBradRepliesLoading(false);
 };
@@ -9487,13 +9504,13 @@ setEnrollingContact(null);
 </div>
 {bradTab==="prospect"&&<div>
 {/* Positive reply queue */}
-{bradReplies.length>0&&(
+{bradReplies.filter(isBradFollowUpReply).length>0&&(
 <div style={{background:B.white,border:`2px solid ${B.green}`,borderRadius:8,padding:14,marginBottom:20}}>
 <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10,flexWrap:"wrap",gap:6}}>
 <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.green,letterSpacing:1}}>🔥 POSITIVE REPLIES — NEEDS FOLLOW-UP</div>
 <button onClick={loadBradReplies} style={{background:"none",border:"none",color:B.muted,fontSize:10,cursor:"pointer",fontFamily:"'Lexend',sans-serif"}}>↺ refresh</button>
 </div>
-{bradReplies.some(r=>(r.output||{}).slack!=="sent")&&(
+{bradReplies.filter(isBradFollowUpReply).some(r=>(r.output||{}).slack!=="sent")&&(
 <div style={{background:B.redBg,border:`1px solid ${B.red}40`,borderRadius:6,padding:"10px 12px",marginBottom:10}}>
 <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,marginBottom:6,lineHeight:1.45}}>
 Slack alerts are not posting. The Slack app only has incoming-webhook. Paste the Incoming Webhook URL from api.slack.com → your app → Incoming Webhooks (pick #sales). Saving it sends every missed reply to Slack now.
@@ -9509,7 +9526,7 @@ style={{background:bradSlackSaving||!bradSlackWebhook.trim()?B.border:B.orange,c
 </div>
 )}
 <div style={{display:"flex",flexDirection:"column",gap:8}}>
-{bradReplies.map(rep=>{
+{bradReplies.filter(isBradFollowUpReply).map(rep=>{
 const inp=rep.input||{};const out=rep.output||{};
 return(
 <div key={rep.id} style={{background:B.surface,borderRadius:6,padding:"10px 12px",display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:12,borderLeft:`3px solid ${B.green}`,flexWrap:"wrap"}}>
@@ -10637,7 +10654,7 @@ if(candidates.length){
 // +50 "replied" score that pushes a contact toward a real Zoho record.
 // Classify before crediting it, same INTENT/PASS check Brad's inbound-
 // email pipeline already uses for exactly this reason.
-const items=candidates.map(({c})=>{const m=byEmail.get(c.email.toLowerCase());return {subject:m.subject||"",snippet:m.snippet||""};});
+const items=candidates.map(({c})=>{const m=byEmail.get(c.email.toLowerCase());return {subject:m.subject||"",snippet:m.snippet||"",fromEmail:c.email||""};});
 const cls=await fetch("/api/gmail",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"classify-intent",items})}).then(r=>r.json()).catch(()=>({results:[]}));
 candidates.forEach(({e},i)=>{
 if((cls.results||[])[i]==="INTENT"){markReplied(campId,e.contactId);found++;}
@@ -14890,6 +14907,7 @@ No Gmail key assigned to your account. Ask an admin to set your Gmail Key in Set
 <RepGmailConnector repKey={myKey} email={cu?.email||""} name={cu?.name||""} />
 )}
 </div>
+<Suspense fallback={null}><RadarInboxCard userId={cu?.id||s.currentUserId} isAdmin={false}/></Suspense>
 </div>
 );
 }
@@ -14913,6 +14931,7 @@ style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B
 </div>
 <OBtn onClick={save}>SAVE SETTINGS</OBtn>
 </div>
+<Suspense fallback={null}><RadarInboxCard userId={cu?.id||s.currentUserId} isAdmin={!!cu?.isAdmin}/></Suspense>
 {/* BCC-to-Deal Email Tracking */}
 <div className="card" style={{padding:16,marginBottom:13,borderTop:`3px solid ${B.blue}`}}>
 <Lbl c={B.blue} s={{marginBottom:6}}>BCC-to-Deal Tracking</Lbl>

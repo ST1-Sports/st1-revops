@@ -4,8 +4,16 @@
  */
 import { prisma } from './prisma.js'
 import { sendSlackText } from './slack.js'
+import { junkReplyReason } from './junkReply.js'
 
-export async function classifyEmailIntent(subject, bodyText) {
+export async function classifyEmailIntent(subject, bodyText, extra = {}) {
+  if (junkReplyReason({
+    subject,
+    body: bodyText,
+    fromEmail: extra.fromEmail || extra.from || '',
+    headers: extra.headers || {},
+  })) return 'PASS'
+
   const apiKey = process.env.ANTHROPIC_KEY
   if (!apiKey) return 'PASS'
   try {
@@ -15,8 +23,8 @@ export async function classifyEmailIntent(subject, bodyText) {
       body: JSON.stringify({
         model:      'claude-haiku-4-5-20251001',
         max_tokens: 10,
-        system:     'Classify this email reply. Reply with only the word INTENT if the person shows genuine interest, asks a question, or wants to learn more. Reply with only PASS for out-of-office, unsubscribes, bounces, or rejections.',
-        messages:   [{ role: 'user', content: `Subject: ${subject}\n\n${(bodyText || '').slice(0, 600)}` }],
+        system:     'Classify this email reply. Reply with only the word INTENT if a real person shows genuine interest, asks a question, or wants to learn more. Reply with only PASS for out-of-office / automatic replies, email warmup or deliverability-network messages (Instantly, Mailwarm, Folderly, and similar tools send fake friendly replies), unsubscribes, bounces, or rejections.',
+        messages:   [{ role: 'user', content: `Subject: ${subject}\nFrom: ${extra.fromEmail || extra.from || ''}\n\n${(bodyText || '').slice(0, 600)}` }],
       }),
     })
     const d = await r.json()
