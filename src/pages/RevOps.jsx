@@ -14783,6 +14783,7 @@ else toast("Send failed: "+(d.error||JSON.stringify(d)),"error");
 } catch(e){ toast("Error: "+e.message,"error"); }
 };
 const revokeAccess=(rep)=>{
+if(!sessionHeaders().Authorization){toast("Sign out and sign in with Google to change access","error");return;}
 if(!window.confirm(`Remove login access for ${rep.name}?`)) return;
 dispatch("DEL_APP_USER",rep.id);
 toast(`Access revoked for ${rep.name}`,"success");
@@ -15155,6 +15156,7 @@ const repAu = (s.appUsers||[]).find(u=>u.repId===rep.id);
 const isRepAdmin = repAu?.isAdmin||false;
 const toggleRepAdmin=()=>{
 // Admin changes are saved only from a signed-in admin's session (server-side check).
+if(!sessionHeaders().Authorization){toast("Sign out and sign in with Google to change admin access","error");return;}
 dispatch("SET_APP_USER",{...(repAu||{}),repId:rep.id,isAdmin:!isRepAdmin});
 toast(!isRepAdmin?`${rep.name} granted admin access`:`${rep.name} admin access removed`,"success");
 };
