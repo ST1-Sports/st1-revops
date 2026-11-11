@@ -4185,7 +4185,7 @@ const isLead=(contact.id||"").startsWith("zoho_l_");
 if(isLead){crmUpdate("Leads",contact.zohoId,{Company:school});}
 else{
 try{
-const r=await fetch("/api/crm/account-name",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({name:school,city,state})});
+const r=await fetch("/api/crm/account-name",{method:"POST",headers:{"Content-Type":"application/json",...internalAuthHeaders()},body:JSON.stringify({name:school,city,state})});
 const d=await r.json();
 if(d.ok)crmUpdate("Contacts",contact.zohoId,{Account_Name:{id:d.accountId}});
 }catch{}
@@ -4406,7 +4406,7 @@ accountId=sel.zohoAccountId;
 // Contacts' Account_Name is a lookup field — sending the school name as a
 // bare string here wouldn't actually link it, same issue as Deals/Quotes
 // had before those were fixed to resolve a real Account id first.
-const r=await fetch("/api/crm/account-name",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({name:pf.school,city:pf.city,state:pf.state})});
+const r=await fetch("/api/crm/account-name",{method:"POST",headers:{"Content-Type":"application/json",...internalAuthHeaders()},body:JSON.stringify({name:pf.school,city:pf.city,state:pf.state})});
 const d=await r.json();
 if(d.ok){accountId=d.accountId;dispatch("UPDATE_CONTACT",{id:sel.id,zohoAccountId:accountId,profileSavedAt:Date.now()});}
 }
@@ -4687,6 +4687,10 @@ if(addForm.lastName&&orgTypeConfig(addAccountForm.orgType).requireContactTitle&&
 savingContactRef.current=true;
 const a={id:mkId(),name:addAccountForm.name.trim(),domain:addAccountForm.domain.trim(),orgType:addAccountForm.orgType,createdAt:Date.now()};
 dispatch("ADD_ACCOUNT",a);
+// Create (or link) the real Zoho CRM Account right away, as rename/enrich already do.
+fetch("/api/crm/account-name",{method:"POST",headers:{"Content-Type":"application/json",...internalAuthHeaders()},body:JSON.stringify({name:a.name,website:a.domain||undefined})})
+.then(r=>r.json()).then(d=>{if(d.ok&&d.accountId)dispatch("UPDATE_ACCOUNT",{id:a.id,zohoAccountId:d.accountId});else toast(`${a.name} saved here, but Zoho: ${d.error||"not created"}`,"error");})
+.catch(()=>toast(`${a.name} saved here, but Zoho could not be reached`,"error"));
 const key=schoolKeyOf({school:a.name,state:""});
 setShowAddAccount(false);
 setAddAccountForm({name:"",domain:"",orgType:"school"});
@@ -4918,7 +4922,7 @@ const newName=accountNameInput.trim();
 if(!newName||newName===schoolCleanName){setEditingAccountName(false);return;}
 setSavingAccountName(true);
 try{
-const r=await fetch("/api/crm/account-name",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({name:newName,city,state})});
+const r=await fetch("/api/crm/account-name",{method:"POST",headers:{"Content-Type":"application/json",...internalAuthHeaders()},body:JSON.stringify({name:newName,city,state})});
 const d=await r.json();
 if(!d.ok){toast(d.error||"Could not resolve Zoho Account","error");setSavingAccountName(false);return;}
 schoolContacts.forEach(c=>{
@@ -4948,7 +4952,7 @@ if(!d.website){toast("Couldn't confidently find an official website","info");set
 // team on next load — not just this browser tab.
 schoolContacts.forEach(c=>dispatch("UPDATE_CONTACT",{id:c.id,website:d.website}));
 if(accountRecord) dispatch("UPDATE_ACCOUNT",{id:accountRecord.id,domain:d.website});
-try{await fetch("/api/crm/account-name",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({name:schoolCleanName,city,state,website:d.website})});}catch{}
+try{await fetch("/api/crm/account-name",{method:"POST",headers:{"Content-Type":"application/json",...internalAuthHeaders()},body:JSON.stringify({name:schoolCleanName,city,state,website:d.website})});}catch{}
 toast(`Found ${d.website} — saved to Zoho and shared account record`,"success");
 }catch(e){toast(`Enrich error: ${e.message}`,"error");}
 setEnrichingWebsite(false);
