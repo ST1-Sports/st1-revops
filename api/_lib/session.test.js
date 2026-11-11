@@ -5,9 +5,10 @@ import { issueSessionToken, signPayload, verifyPayload } from './session.js';
 describe('signed session tokens', () => {
   const saved = {};
   beforeEach(() => {
-    for (const k of ['SESSION_SECRET', 'RADAR_TOKEN_KEY', 'TOKEN_ENCRYPTION_KEY']) saved[k] = process.env[k];
+    for (const k of ['SESSION_SECRET', 'RADAR_TOKEN_KEY', 'TOKEN_ENCRYPTION_KEY', 'DATABASE_URL']) saved[k] = process.env[k];
     delete process.env.RADAR_TOKEN_KEY;
     delete process.env.TOKEN_ENCRYPTION_KEY;
+    delete process.env.DATABASE_URL;
     process.env.SESSION_SECRET = 'test-secret-at-least-16-chars';
   });
   afterEach(() => {
@@ -32,6 +33,15 @@ describe('signed session tokens', () => {
     assert.equal(verifyPayload('radar-oauth', token), null);
     assert.equal(verifyPayload('session', 'nonsense'), null);
     assert.equal(verifyPayload('session', `${body}.${sig}.extra`), null);
+  });
+
+  it('falls back to a key derived from DATABASE_URL so sign-in never locks everyone out', () => {
+    delete process.env.SESSION_SECRET;
+    process.env.DATABASE_URL = 'postgresql://user:secret@host/db';
+    const token = issueSessionToken('r_abc');
+    assert.equal(verifyPayload('session', token).sub, 'r_abc');
+    delete process.env.DATABASE_URL;
+    assert.equal(verifyPayload('session', token), null);
   });
 
   it('fails closed without a signing key', () => {

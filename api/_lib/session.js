@@ -7,8 +7,8 @@
  * take the rep from that token and read admin status from app_state on the server.
  *
  * Signing key: SESSION_SECRET, else the Radar token key (RADAR_TOKEN_KEY / TOKEN_ENCRYPTION_KEY),
- * with a purpose-specific subkey so the encryption key is never used directly for signing.
- * Fails closed: without a key no token is issued and protected routes answer 401.
+ * else DATABASE_URL, always through a purpose-specific subkey. Fails closed: without any key no
+ * token is issued and protected routes answer 401.
  */
 import crypto from 'crypto';
 import { prisma } from './prisma.js';
@@ -16,7 +16,15 @@ import { prisma } from './prisma.js';
 const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 
 function signingKey(purpose) {
-  const secret = process.env.SESSION_SECRET || process.env.RADAR_TOKEN_KEY || process.env.TOKEN_ENCRYPTION_KEY;
+  // DATABASE_URL is the last resort: a server-only secret the app cannot run without, so sign-in
+  // never locks everyone out just because SESSION_SECRET was not configured yet. A purpose
+  // subkey is derived below; the raw value is never used for signing. Set SESSION_SECRET to
+  // decouple sessions from the database credential (rotating either signs everyone out).
+  const secret =
+    process.env.SESSION_SECRET ||
+    process.env.RADAR_TOKEN_KEY ||
+    process.env.TOKEN_ENCRYPTION_KEY ||
+    process.env.DATABASE_URL;
   if (!secret || secret.length < 16) return null;
   return crypto.createHmac('sha256', secret).update(`st1-revops:${purpose}:v1`).digest();
 }
@@ -70,7 +78,12 @@ export async function readRep(req) {
   const appUser = (Array.isArray(state.appUsers) ? state.appUsers : []).find(u => u?.repId === session.sub);
   if (!appUser) return null;
   const rep = (Array.isArray(state.reps) ? state.reps : []).find(r => r?.id === session.sub);
-  return { repId: session.sub, isAdmin: !!appUser.isAdmin, email: String(rep?.email || '').toLowerCase() };
+  return {
+    repId: session.sub,
+    isAdmin: !!appUser.isAdmin,
+    email: String(rep?.email || '').toLowerCase(),
+    gmailEnvKey: String(rep?.gmailEnvKey || ''),
+  };
 }
 
 /**

@@ -305,13 +305,28 @@ describe('/api/state preserves stored priceLists', () => {
   }
   const STORED_LISTS = [{ id: 'pl-1', name: 'Athletic Connection 2026', type: 'own', items: [{ id: 'i1', sku: 'AC-1', cost: 10 }] }];
 
-  beforeEach(() => {
-    db.setting = { key: 'app_state', value: { deals: [], priceLists: STORED_LISTS }, updatedAt: new Date(1000) };
+  // /api/state requires a signed-in rep.
+  let auth;
+  beforeEach(async () => {
+    process.env.SESSION_SECRET = 'test-session-secret-123456';
+    const { issueSessionToken } = await import('./session.js');
+    auth = { authorization: `Bearer ${issueSessionToken('r1')}` };
+    db.setting = {
+      key: 'app_state',
+      value: { deals: [], priceLists: STORED_LISTS, appUsers: [{ repId: 'r1', isAdmin: false }] },
+      updatedAt: new Date(1000),
+    };
+  });
+
+  it('rejects requests without a session', async () => {
+    const res = mockRes();
+    await stateHandler({ method: 'GET', headers: {} }, res);
+    assert.equal(res.statusCode, 401);
   });
 
   it('keeps priceLists when a client writes state without them', async () => {
     const res = mockRes();
-    await stateHandler({ method: 'POST', body: { state: { deals: [{ id: 'd1' }] } } }, res);
+    await stateHandler({ method: 'POST', headers: auth, body: { state: { deals: [{ id: 'd1' }] } } }, res);
     assert.equal(res.statusCode, 200);
     assert.deepEqual(db.setting.value.priceLists, STORED_LISTS);
     assert.deepEqual(db.setting.value.deals, [{ id: 'd1' }]);
@@ -319,13 +334,13 @@ describe('/api/state preserves stored priceLists', () => {
 
   it('ignores a client attempt to overwrite or empty priceLists', async () => {
     const res = mockRes();
-    await stateHandler({ method: 'POST', body: { state: { deals: [], priceLists: [] } } }, res);
+    await stateHandler({ method: 'POST', headers: auth, body: { state: { deals: [], priceLists: [] } } }, res);
     assert.deepEqual(db.setting.value.priceLists, STORED_LISTS);
   });
 
   it('GET omits priceLists from the response without touching the stored row', async () => {
     const res = mockRes();
-    await stateHandler({ method: 'GET' }, res);
+    await stateHandler({ method: 'GET', headers: auth }, res);
     assert.equal('priceLists' in res.body.state, false);
     assert.deepEqual(db.setting.value.priceLists, STORED_LISTS);
   });
