@@ -109,7 +109,7 @@ function messageFromEdgar(edgar) {
       const sell = li.quotedPrice != null ? `quote $${Number(li.quotedPrice).toFixed(2)}` : '';
       return `${li.name}${sku}: ${cost}${sell ? ` · ${sell}` : ''}`;
     });
-    return `Edgar pulled this from the ST1 PIM catalog:\n${lines.join('\n')}`;
+    return `Edgar pulled this from the ST1 PIM catalog (or the dealer price lists where the PIM had no match):\n${lines.join('\n')}`;
   }
   return '';
 }
@@ -131,7 +131,7 @@ function messageFromToolResults(agentResults) {
     const sku = p.sku ? ` [${p.sku}]` : '';
     const from = p.supplier ? ` · ${p.supplier}` : '';
     if (price != null) return `${name}${sku}${from}: $${Number(price).toFixed(2)}.`;
-    return `${name}${sku} is in the PIM catalog, but no customer price is on file.`;
+    return `${name}${sku} is on file, but no customer price is set.`;
   }
   return '';
 }
@@ -578,7 +578,7 @@ ${activeRfps.length === 0 ? "None" : activeRfps.map(r=>`· ${r.name} — ${r.sta
 === AR ===
 $${Math.round(ar).toLocaleString()} outstanding${invoices.filter(i=>i.status==="overdue").length>0?` — ${invoices.filter(i=>i.status==="overdue").length} overdue`:""}
 
-Product catalog lives in the ST1 PIM (home-built). Call get_st1_pricing for a cost, list, MAP, or inventory check. Call call_edgar only for a formal quote. Never invent a price.
+Product catalog lives in the ST1 PIM (home-built); the older dealer price lists are a fallback when the PIM has no match. Call get_st1_pricing for a cost, list, MAP, or inventory check. Call call_edgar only for a formal quote. Never invent a price.
 ${storedIntel.length > 0 ? `=== STORED COMPETITOR INTEL (${storedIntel.length} competitors) ===
 ${storedIntel.map(c => `· ${c.name}: ${c.summary}`).join("\n")}
 (Use this when answering questions about competitors or building counter-strategies)
@@ -718,9 +718,9 @@ COMPETITOR INTEL — ALWAYS DO THIS:
 
 PRICING & RFP STRATEGY:
 - When asked "how much should we charge", "what's our cost", or "what's the price" — call get_st1_pricing (PIM). Do not invent a price. Call call_edgar only if they want a quote for a named school.
-- For RFP responses: always check COMPETITOR PRICING INTEL. If we have a competitor's price on the same or similar item, proactively note the comparison and suggest a strategy (match, undercut slightly, or justify higher with service/speed/quality).
+- For RFP responses: if STORED COMPETITOR INTEL above covers a competitor on this bid, note how ST1 compares and suggest a strategy (match, undercut slightly, or justify higher with service/speed/quality). Never invent a competitor's price.
 - When we have no price data, suggest 20–40% margin over cost as a general rule for athletic equipment, and recommend Matt reviews before submitting.
-- Always include confidence level when quoting prices: "Based on the ST1 PIM" vs "Estimated — confirm with Matt before quoting".
+- Always include confidence level when quoting prices: "Based on the ST1 PIM" (or "Based on our dealer price list" when the result came from the price-list fallback) vs "Estimated — confirm with Matt before quoting".
 
 CAMPAIGN BUILDING:
 - When a user asks to "send a sequence", "build a campaign", "email X coaches", or "reach out to Y group", use propose_create_campaign_sequence.

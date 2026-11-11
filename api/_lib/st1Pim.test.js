@@ -56,23 +56,34 @@ describe('mapPimProduct', () => {
     assert.equal(mapPimProduct({ id: 1, baseCost: 10 }), null);
     assert.equal(mapPimProduct(null), null);
   });
+
+  it('does not treat arbitrary named records as products', () => {
+    assert.equal(mapPimProduct({ id: 3, name: 'Athletic Connection', category: 'Track' }), null);
+    assert.equal(mapPimProduct({ id: 4, name: 'Jane Coach', email: 'j@example.com' }), null);
+    assert.equal(mapPimProduct({ id: 5, title: 'Cheyenne Mtn HS store', status: 'open' }), null);
+    assert.deepEqual(unwrapProductList({ id: 3, name: 'Athletic Connection' }), []);
+  });
 });
 
 describe('mapPimToCatalogProduct', () => {
-  it('exposes inventory and cost on the catalog card', () => {
+  it('exposes inventory but never dealer cost or MAP on the catalog card', () => {
     const item = mapPimProduct({
       id: 'p1',
       sku: 'H-1',
       name: 'Hurdle',
       baseCost: 40,
       sellPrice: 65,
+      map: 60,
       quantityOnHand: 3,
       supplier: { name: 'Spalding' },
     });
     const product = mapPimToCatalogProduct(item);
     assert.equal(product.sku, 'H-1');
-    assert.equal(product.cost, 40);
+    assert.equal('cost' in product, false);
+    assert.equal('map' in product, false);
+    assert.equal('lastCost' in product, false);
     assert.equal(product.price, 65);
+    assert.equal(product.dataSource, 'pim');
     assert.equal(product.inventory, 3);
     assert.equal(product.supplier, 'Spalding');
     assert.equal(product.source.system, 'ST1 PIM');

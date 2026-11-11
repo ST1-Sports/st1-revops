@@ -2,8 +2,9 @@
  * GET /api/pricelists — retired.
  *
  * Uploaded dealer lists are no longer stored or quoted from. Scout and Edgar
- * read the ST1 PIM catalog. Historical PriceItem rows may still exist for
- * vendor-bill matching, but this HTTP API no longer reads or writes them.
+ * read the ST1 PIM catalog. Existing PriceItem rows are kept (never deleted):
+ * Scout and Edgar fall back to them when the PIM has no match, and vendor-bill
+ * matching still reads them. This HTTP API no longer reads or writes them.
  */
 import { setCors } from '../_lib/cors.js'
 

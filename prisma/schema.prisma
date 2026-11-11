@@ -479,7 +479,8 @@ model alert_history {
 
 // ── AGENT BRAIN ───────────────────────────────────────────────────────────────
 // Historical uploaded dealer lists. Quoting (Scout / Edgar) now reads the
-// ST1 PIM catalog. Supplier + PriceItem remain for vendor-bill matching.
+// ST1 PIM catalog first; Supplier + PriceItem remain as the quoting fallback
+// when the PIM is unavailable or has no match, and for vendor-bill matching.
 
 model Supplier {
   id          String      @id @default(cuid())

@@ -17,6 +17,7 @@ import {
   mapSalesContact,
   mapZohoContact,
   PIM_SOURCE,
+  PRICE_LIST_SOURCE,
   retrievedAt,
   safeLimit,
   searchZohoCrm,
@@ -27,7 +28,17 @@ const PRODUCT_LOOKUP_SCHEMA = {
   type: 'object',
   additionalProperties: false,
   properties: {
-    productId: { type: 'string', minLength: 1, maxLength: 80, description: 'ST1 PIM / catalog product ID.' },
+    // Integer catalog ids (the original contract) and string PIM ids are both
+    // accepted. String ids are restricted to plain id characters because they
+    // are placed in a PIM URL path.
+    productId: {
+      type: ['integer', 'string'],
+      minimum: 1,
+      minLength: 1,
+      maxLength: 80,
+      pattern: '^[A-Za-z0-9_-][A-Za-z0-9._-]*$',
+      description: 'Product ID. A number is a synced-catalog product ID; a string is an ST1 PIM product ID (numeric strings also match the synced catalog).',
+    },
     sku: { type: 'string', minLength: 1, maxLength: 80, description: 'SKU or vendor item code to look up.' },
     productName: { type: 'string', minLength: 2, maxLength: 160, description: 'Product name or partial name.' },
     query: { type: 'string', minLength: 2, maxLength: 160, description: 'Search text when you do not have a SKU (e.g. basketball).' },
@@ -80,7 +91,8 @@ async function getSt1Pricing(input) {
   if (!query && !input.productId) {
     return notFound('get_st1_pricing', input, [], ['Need a product name, SKU, or product ID.']);
   }
-  // findProducts/fetchZohoItems are only used when the PIM has no match.
+  // findProducts/fetchZohoItems are only used when neither the PIM nor the
+  // dealer price lists have a match (findPriceItems falls back PIM → lists).
   const listItems = await findPriceItems({
     query,
     sku: input.sku,
@@ -102,6 +114,9 @@ async function getSt1Pricing(input) {
       );
       if (cheaper) primaryList = cheaper;
     }
+    const fromPim = primaryList.dataSource === 'pim';
+    const sourceName = fromPim ? PIM_SOURCE : PRICE_LIST_SOURCE;
+    const rowWord = fromPim ? 'PIM product' : 'price-list row';
     const cost = numOrNull(primaryList.cost ?? primaryList.lastCost);
     const ourPrice = numOrNull(primaryList.ourPrice);
     const mapPrice = numOrNull(primaryList.map);
@@ -120,8 +135,9 @@ async function getSt1Pricing(input) {
         brand: primaryList.brand || input.brand || null,
         supplier: primaryList.supplier?.name || null,
         currency: 'USD',
-        cost: cost == null ? null : { amount: cost, source: `${PIM_SOURCE} (dealer cost)` },
-        customerPrice: customerPrice == null ? null : { amount: customerPrice, source: ourPrice != null ? `${PIM_SOURCE} (our price)` : mapPrice != null ? `${PIM_SOURCE} (MAP)` : `${PIM_SOURCE} (MSRP)` },
+        dataSource: primaryList.dataSource || null,
+        cost: cost == null ? null : { amount: cost, source: `${sourceName} (dealer cost)` },
+        customerPrice: customerPrice == null ? null : { amount: customerPrice, source: ourPrice != null ? `${sourceName} (our price)` : mapPrice != null ? `${sourceName} (MAP)` : `${sourceName} (MSRP)` },
         regularPrice: msrp,
         salePrice: ourPrice,
         onSale: null,
@@ -142,12 +158,14 @@ async function getSt1Pricing(input) {
           msrp: numOrNull(it.msrp),
           inventory: numOrNull(it.inventory),
           stockStatus: it.stockStatus || null,
+          dataSource: it.dataSource || null,
         })),
       },
-      sources: [source(PIM_SOURCE, { recordId: primaryList.id, supplier: primaryList.supplier?.name || null })],
+      sources: [source(sourceName, { recordId: primaryList.id, supplier: primaryList.supplier?.name || null })],
       limitations: [
-        cost == null ? 'Dealer cost was not set on this PIM product.' : null,
-        customerPrice == null ? 'Our price / MAP / MSRP were not set on this PIM product.' : null,
+        fromPim ? null : 'From the legacy dealer price lists — the ST1 PIM was unavailable or had no match.',
+        cost == null ? `Dealer cost was not set on this ${rowWord}.` : null,
+        customerPrice == null ? `Our price / MAP / MSRP were not set on this ${rowWord}.` : null,
         bestNote,
       ].filter(Boolean),
     });
@@ -174,7 +192,7 @@ async function getSt1Pricing(input) {
     return notFound('get_st1_pricing', input, zoho.sources || [], [
       isPimConfigured() ? null : 'ST1 PIM credentials are not configured (ST1_ADMIN_SERVICE_EMAIL / ST1_ADMIN_SERVICE_PASSWORD).',
       zoho.configured === false ? 'Zoho Books is not configured for item cost lookup.' : null,
-      'No matching item in the ST1 PIM catalog or Zoho Books.',
+      'No matching item in the ST1 PIM catalog, dealer price lists, product catalog, or Zoho Books.',
     ].filter(Boolean));
   }
 
@@ -358,7 +376,7 @@ async function getSt1Vendor(input) {
   if (!result.length) {
     return notFound('get_st1_vendor', input, zoho.sources || [], [
       zoho.configured === false ? 'Zoho Books is not configured for vendor lookup.' : null,
-      'No matching supplier in the ST1 PIM directory, Zoho Books vendor fields, or product catalog brands.',
+      'No matching supplier in the ST1 PIM directory, dealer price-list suppliers, Zoho Books vendor fields, or product catalog brands.',
     ].filter(Boolean));
   }
 
@@ -368,7 +386,7 @@ async function getSt1Vendor(input) {
     result: result.length === 1 ? result[0] : result,
     sources: result.map(entry => entry.source).filter(Boolean),
     limitations: [
-      'Vendor lookup is read-only: ST1 PIM suppliers first, then Zoho Books item vendor fields and product catalog brands.',
+      'Vendor lookup is read-only: ST1 PIM suppliers first (dealer price-list suppliers if the PIM is unavailable), then Zoho Books item vendor fields and product catalog brands.',
       zoho.warning || null,
     ].filter(Boolean),
   });
@@ -620,7 +638,7 @@ export const AI_TOOLS = [
   },
   {
     name: 'get_st1_pricing',
-    description: 'Fast cost / list / MAP / inventory lookup from the ST1 PIM catalog (same source Edgar quotes from), then Zoho Books if the PIM has no match. Returns dealer cost, our price, MAP, stock, and vendorRates. Use this for "what\'s our cost" or "what\'s the price" — do not call Edgar unless the user wants a formal quote. Pass the full product name or model (e.g. TF-5000), not a generic word like "ball".',
+    description: 'Fast cost / list / MAP / inventory lookup from the ST1 PIM catalog (same source Edgar quotes from), falling back to the dealer price lists and then Zoho Books when the PIM has no match. Returns dealer cost, our price, MAP, stock, and vendorRates. Use this for "what\'s our cost" or "what\'s the price" — do not call Edgar unless the user wants a formal quote. Pass the full product name or model (e.g. TF-5000), not a generic word like "ball".',
     permission: 'pricing:read',
     readOnly: true,
     input_schema: {
@@ -634,7 +652,7 @@ export const AI_TOOLS = [
   },
   {
     name: 'get_st1_product',
-    description: 'Look up a product from the ST1 PIM catalog (products, inventory, supplier, cost) by product ID, SKU, name, or brand.',
+    description: 'Look up a product from the ST1 PIM catalog (falling back to the synced product catalog) — name, SKU, price, inventory, supplier — by product ID, SKU, name, or brand. Does not return dealer cost; use get_st1_pricing for cost.',
     permission: 'product:read',
     readOnly: true,
     input_schema: {

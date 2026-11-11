@@ -422,8 +422,6 @@ return server.filter(u=>u?.repId).map(u=>({...localByRep[u.repId], ...u, pin: lo
 }
 function mergeServerState(base, server) {
 if (!server || typeof server !== "object") return base;
-const {priceLists:_ignoredPriceLists,...serverRest}=server;
-server = serverRest;
 const suppressedDealIds = mergeIdLists(base.suppressedDealIds, server.suppressedDealIds);
 const suppressedDealZohoIds = mergeIdLists(base.suppressedDealZohoIds, server.suppressedDealZohoIds);
 const suppressedContactIds = mergeIdLists(base.suppressedContactIds, server.suppressedContactIds);
@@ -471,8 +469,9 @@ try {
 const saved = localStorage.getItem(STORE);
 if (saved) {
 const p = JSON.parse(saved);
-const {priceLists:_droppedPriceLists,...pRest}=p;
-return {...SEED,...pRest,
+// priceLists (uploaded dealer catalogs) has no screen any more but is kept
+// as-is in this browser's saved state — never dropped from localStorage.
+return {...SEED,...p,
 deals:        filterLiveDeals(sanitizeLookupFields(Array.isArray(p.deals) ? p.deals : [], ["school","contact"]), p),
 invoices:     Array.isArray(p.invoices)     ? p.invoices     : [],
 rfps:         Array.isArray(p.rfps)         ? p.rfps         : [],
@@ -523,7 +522,7 @@ const {agentHistory: _sah, ...serverClean} = d.state;
 setRaw(prev => {
 const merged = mergeServerState(prev, serverClean);
 setTimeout(() => {
-try { const {priceLists:_plSave,...persist}=merged; localStorage.setItem(STORE, JSON.stringify(persist)); } catch {}
+try { localStorage.setItem(STORE, JSON.stringify(merged)); } catch {}
 }, 0);
 const {currentUserId: _cid, agentHistory: _ah, priceLists: _pl, ...toSync} = merged;
 fetch("/api/state", {method:"POST", headers:{"Content-Type":"application/json"},
@@ -553,7 +552,7 @@ setRaw(prev => {
 const next = typeof fn === "function" ? fn(prev) : {...prev,...fn};
 if (saveTimer.current) clearTimeout(saveTimer.current);
 saveTimer.current = setTimeout(() => {
-const doSave = () => { try { const {priceLists:_plSave,...persist}=next; localStorage.setItem(STORE, JSON.stringify(persist)); } catch {} };
+const doSave = () => { try { localStorage.setItem(STORE, JSON.stringify(next)); } catch {} };
 if (typeof requestIdleCallback !== "undefined") requestIdleCallback(doSave, {timeout:2000});
 else doSave();
 }, 300);
@@ -950,7 +949,7 @@ return {...c,touches};
 })};
 }
 case "DELETE_CAMPAIGN": return {...prev, campaigns:(prev.campaigns||[]).filter(c=>c.id!==payload)};
-case "RESET":               return {...SEED, currentUserId:prev.currentUserId, integrations:prev.integrations, company:prev.company, brandAssets:prev.brandAssets||[], savedAds:prev.savedAds||[], appUsers:prev.appUsers||[], contactLists:prev.contactLists||[], campaigns:prev.campaigns||[], reps:prev.reps||[]};
+case "RESET":               return {...SEED, currentUserId:prev.currentUserId, integrations:prev.integrations, company:prev.company, brandAssets:prev.brandAssets||[], savedAds:prev.savedAds||[], appUsers:prev.appUsers||[], contactLists:prev.contactLists||[], campaigns:prev.campaigns||[], reps:prev.reps||[], ...(prev.priceLists!==undefined?{priceLists:prev.priceLists}:{})};
 default:                  return prev;
 }
 }

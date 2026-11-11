@@ -1,7 +1,8 @@
 /**
  * Edgar — ST1's quoting agent.
  *
- * Reads the ST1 PIM catalog (products, cost, MAP, inventory),
+ * Reads the ST1 PIM catalog (products, cost, MAP, inventory), falling back to
+ * the legacy dealer price lists (suppliers + price_items) when the PIM has no match,
  * respects GM floors, and formats to the ST1 quote standard. Edgar has NO side effects —
  * he produces a quote; a human sends it.
  *
@@ -24,7 +25,7 @@ export default {
     'customer for products (e.g. "quote Cheyenne Mtn HS for 12 discus and a set of ' +
     'hurdles"). Does not send anything.',
 
-  dataSources: ['st1_pim', 'agent_memory'],
+  dataSources: ['st1_pim', 'price_items', 'agent_memory'],
 
   guardrails: {
     sideEffects:      false,        // produces a quote only

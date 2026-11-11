@@ -6,6 +6,8 @@ import { BOOKS as BOOKS_BASE } from '../zoho-books.js';
 import { zohoCriteriaValue } from '../zohoAccount.js';
 import {
   minAcceptableScore,
+  prismaContainsOr,
+  prismaGenericAnd,
   rankPriceItems,
   tokenizePriceQuery,
 } from '../priceSearch.js';
@@ -49,9 +51,9 @@ export const PRICING_POLICY = {
   name: 'ST1 pricing policy',
   summary: 'Use authoritative internal price and cost sources first; never invent missing pricing.',
   rules: [
-    'Use the ST1 PIM catalog first for products, dealer cost, sell/MAP/MSRP, and inventory — same source Edgar quotes from. Rank by model/SKU, not alphabetical generic words.',
+    'Use the ST1 PIM catalog first for products, dealer cost, sell/MAP/MSRP, and inventory — same source Edgar quotes from. When the PIM is unavailable or has no match, the legacy ST1 dealer price lists are used instead. Rank by model/SKU, not alphabetical generic words.',
     'For a named product cost or quote, prefer Edgar (call_edgar) so GM floor and MAP are applied.',
-    'Use Zoho Books item cost and price data only when the PIM has no match.',
+    'Use Zoho Books item cost and price data only when neither the PIM nor the dealer price lists have a match.',
     'When cost is not available, return null and explain the limitation.',
     'Never estimate internal cost unless the user explicitly asks for a non-authoritative estimate.',
     'Include source records and retrieval timestamps in pricing answers.',
@@ -148,6 +150,7 @@ export function mapProduct(product) {
     tags: product.tags || [],
     attributes: product.attributes || [],
     modifiedAt: product.date_modified ? product.date_modified.toISOString() : null,
+    dataSource: 'catalog',
     source: source('ST1 product catalog (Shopify sync)', { recordId: String(product.id) }),
   };
 }
@@ -173,9 +176,94 @@ const PRODUCT_SELECT = {
   date_modified: true,
 };
 
+export const PRICE_LIST_SOURCE = 'ST1 Price Lists';
+
+const COMP_PREFIX = '__COMPETITOR__:';
+
+const OWN_LIST = { active: true, NOT: { category: { startsWith: COMP_PREFIX } } };
+
+function logPimFallback(fn, err) {
+  if (err?.code !== 'pim_not_configured') {
+    console.warn(`[pim] ${fn} falling back to price lists:`, err?.message || err);
+  }
+}
+
+async function queryPriceItemCandidates(or, take) {
+  if (!or.length) return [];
+  return prisma.priceItem.findMany({
+    where: { supplier: OWN_LIST, OR: or },
+    include: { supplier: { select: { id: true, name: true } } },
+    take,
+  });
+}
+
+function rankAndPick(rows, q, sku, tokens, limit) {
+  const ranked = rankPriceItems(rows, q, { sku });
+  const floor = minAcceptableScore(tokens);
+  const good = ranked.filter(r => r.score >= floor);
+  const picked = (good.length ? good : ranked).slice(0, safeLimit(limit, 10, 25));
+  return {
+    hasGood: good.length > 0,
+    items: picked.map(({ item, score }) => {
+      item.searchScore = score;
+      return item;
+    }),
+  };
+}
+
 /**
- * Ranked PIM lookup. Model/SKU tokens (TF-5000) are searched first so a
- * large catalog does not return unrelated "ball" rows.
+ * Legacy dealer price-list lookup (PriceItem / Supplier), unchanged from
+ * before the PIM integration. Model/SKU tokens (TF-5000) are searched first
+ * so a 4,000-row Athletic Connection list does not return unrelated "ball"
+ * rows. Every row is labelled dataSource: 'price_list'.
+ */
+export async function findPriceListItems({ query, sku, limit = 10 } = {}) {
+  const q = String(query || sku || '').trim();
+  if (q.length < 2 && !sku) return [];
+  const tokens = tokenizePriceQuery([q, sku].filter(Boolean).join(' '));
+  const take = Math.min(120, Math.max(40, safeLimit(limit, 10, 25) * 8));
+
+  let rows = [];
+  if (tokens.models.length) {
+    rows = await queryPriceItemCandidates(prismaContainsOr(tokens.models, sku), take);
+  }
+  if (!rows.length && tokens.distinctive.length) {
+    rows = await queryPriceItemCandidates(prismaContainsOr(tokens.distinctive, sku), take);
+  }
+  if (!rows.length && !tokens.models.length && !tokens.distinctive.length && tokens.generic.length >= 2) {
+    const and = prismaGenericAnd(tokens.generic);
+    if (and.length) {
+      rows = await prisma.priceItem.findMany({
+        where: { supplier: OWN_LIST, AND: and },
+        include: { supplier: { select: { id: true, name: true } } },
+        take,
+      });
+    }
+  }
+  if (!rows.length) {
+    rows = await queryPriceItemCandidates(prismaContainsOr(tokens.searchNeedles, sku), take);
+  }
+
+  for (const row of rows) row.dataSource = 'price_list';
+  return rankAndPick(rows, q, sku, tokens, limit).items;
+}
+
+/**
+ * Integer productIds are the original contract: synced-catalog (Product) ids.
+ * They are never sent to the PIM's /admin/products/{id}, where the same
+ * number could name a different product. Only string ids are PIM ids.
+ */
+function pimProductId(productId) {
+  return typeof productId === 'string' && productId.trim() ? productId.trim() : undefined;
+}
+
+/**
+ * Ranked price lookup: ST1 PIM first, then the legacy dealer price lists.
+ *
+ * The price lists are used whenever the PIM is unconfigured, errors, times
+ * out, returns nothing, or returns only weak matches — so quoting is never
+ * worse than the price-list-only behaviour it replaces. Each row carries
+ * dataSource: 'pim' | 'price_list' so agents and the UI can tell them apart.
  */
 export async function findPriceItems({ query, sku, productId, limit = 10 } = {}) {
   const q = String(query || sku || '').trim();
@@ -183,24 +271,32 @@ export async function findPriceItems({ query, sku, productId, limit = 10 } = {})
   const tokens = tokenizePriceQuery([q, sku].filter(Boolean).join(' '));
   const take = Math.min(80, Math.max(20, safeLimit(limit, 10, 25) * 4));
 
-  let rows = [];
+  let pim = { hasGood: false, items: [] };
+  const pimId = pimProductId(productId);
   try {
-    rows = await searchPimProducts({ query: q, sku, productId, limit: take });
-  } catch (err) {
-    if (err?.code !== 'pim_not_configured') {
-      console.warn('[pim] findPriceItems:', err.message);
+    const rows = await searchPimProducts({ query: q, sku, productId: pimId, limit: take });
+    const exact = pimId ? rows.filter(r => String(r.id) === pimId) : [];
+    if (exact.length) {
+      // An exact PIM id hit is authoritative regardless of text score.
+      return exact.slice(0, safeLimit(limit, 10, 25)).map(item => {
+        item.searchScore = Number.MAX_SAFE_INTEGER;
+        return item;
+      });
     }
-    return [];
+    pim = rankAndPick(rows, q, sku, tokens, limit);
+    if (pim.hasGood) return pim.items;
+  } catch (err) {
+    logPimFallback('findPriceItems', err);
   }
 
-  const ranked = rankPriceItems(rows, q, { sku });
-  const floor = minAcceptableScore(tokens);
-  const good = ranked.filter(r => r.score >= floor);
-  const picked = (good.length ? good : ranked).slice(0, safeLimit(limit, 10, 25));
-  return picked.map(({ item, score }) => {
-    item.searchScore = score;
-    return item;
-  });
+  let listItems = [];
+  try {
+    listItems = await findPriceListItems({ query: q, sku, limit });
+  } catch (err) {
+    if (!pim.items.length) throw err;
+    console.warn('[price-lists] findPriceItems:', err.message);
+  }
+  return listItems.length ? listItems : pim.items;
 }
 
 export async function findSuppliers({ query = '', limit = 10 } = {}) {
@@ -211,19 +307,18 @@ export async function findSuppliers({ query = '', limit = 10 } = {}) {
     if (pim.length) {
       return pim.map(s => ({
         ...s,
+        dataSource: 'pim',
         source: source(PIM_SOURCE, { recordId: s.id }),
       }));
     }
   } catch (err) {
-    if (err?.code !== 'pim_not_configured') {
-      console.warn('[pim] findSuppliers:', err.message);
-    }
+    logPimFallback('findSuppliers', err);
   }
   if (q.length < 2) return [];
   const rows = await prisma.supplier.findMany({
     where: {
       active: true,
-      NOT: { category: { startsWith: '__COMPETITOR__:' } },
+      NOT: { category: { startsWith: COMP_PREFIX } },
       OR: [
         { name: { contains: q, mode: 'insensitive' } },
         { category: { contains: q, mode: 'insensitive' } },
@@ -248,15 +343,37 @@ export async function findSuppliers({ query = '', limit = 10 } = {}) {
     rep: s.rep || null,
     itemCount: s._count?.items || 0,
     notes: s.notes ? String(s.notes).slice(0, 240) : null,
+    dataSource: 'price_list',
     source: source('ST1 supplier directory', { recordId: s.id }),
   }));
+}
+
+/** Synced-catalog Product.id is an integer; accept 123 or "123". */
+export function catalogIntId(productId) {
+  if (Number.isInteger(productId)) return productId;
+  if (typeof productId === 'string' && /^\d{1,15}$/.test(productId.trim())) {
+    const n = Number(productId.trim());
+    return Number.isSafeInteger(n) ? n : null;
+  }
+  return null;
 }
 
 export async function findProducts({ query, productId, brand, sku, limit = 10 } = {}) {
   const take = safeLimit(limit, 10, 50);
   const q = String(query || sku || '').trim();
+
+  if (Number.isInteger(productId)) {
+    // Legacy integer ids are synced-catalog ids: exact lookup first, as before.
+    const exact = await prisma.product.findMany({
+      where: { id: productId },
+      take,
+      select: PRODUCT_SELECT,
+    });
+    if (exact.length) return exact.map(mapProduct);
+  }
+
   try {
-    const pim = await searchPimProducts({ query: q || brand, sku, productId, limit: take });
+    const pim = await searchPimProducts({ query: q || brand, sku, productId: pimProductId(productId), limit: take });
     let mapped = pim.map(mapPimToCatalogProduct).filter(Boolean);
     if (brand) {
       const b = String(brand).toLowerCase();
@@ -265,16 +382,16 @@ export async function findProducts({ query, productId, brand, sku, limit = 10 } 
     }
     if (mapped.length) return mapped.slice(0, take);
   } catch (err) {
-    if (err?.code !== 'pim_not_configured') {
-      console.warn('[pim] findProducts:', err.message);
-    }
+    logPimFallback('findProducts', err);
   }
 
+  // Fallback: the synced product catalog exactly as before the PIM.
+  const dbId = catalogIntId(productId);
   const where = {};
   const or = [];
 
-  if (Number.isInteger(productId)) {
-    where.id = productId;
+  if (dbId != null) {
+    where.id = dbId;
   } else {
     if (query) {
       or.push(
@@ -298,7 +415,7 @@ export async function findProducts({ query, productId, brand, sku, limit = 10 } 
     select: PRODUCT_SELECT,
   });
 
-  if (!query || directMatches.length >= take || Number.isInteger(productId)) {
+  if (!query || directMatches.length >= take || dbId != null) {
     return directMatches.map(mapProduct);
   }
 
