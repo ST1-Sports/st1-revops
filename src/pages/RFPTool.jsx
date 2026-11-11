@@ -939,7 +939,7 @@ ${ST1}
                   {[
                     ["📋 Parse All Docs","Reads every PDF simultaneously — specs, addenda, requirements"],
                     ["📦 Detect Shipping","Finds exact language about whether freight is in the price or separate"],
-                    ["💰 Price Every Item","Uses ST1 margins and price lists to bid every line competitively"],
+                    ["💰 Price Every Item","Uses ST1 margins and the PIM catalog to bid every line competitively"],
                     ["📤 Export to Spreadsheet","Fills their template with your prices, ready to submit"],
                   ].map(([t,d])=>(
                     <div key={t} style={{padding:"10px 12px",background:B.surface,borderRadius:5}}>

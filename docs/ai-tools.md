@@ -253,8 +253,12 @@ Claude should not guess. It should call:
 }
 ```
 
-The application calculates the answer from configured sources such as Zoho Books
-items and the synced ST1 product catalog, then returns JSON:
+The application calculates the answer from the ST1 PIM catalog, falling back to
+the legacy dealer price lists (PriceItem) when the PIM is unavailable or has no
+match, then Zoho Books. Each result says which source it came from
+(`dataSource: "pim" | "price_list"`). Product lookups (`get_st1_product`,
+`search_st1_knowledge` products) never include dealer cost or MAP; those are
+only returned by `get_st1_pricing` (`pricing:read`). It returns JSON:
 
 ```json
 {

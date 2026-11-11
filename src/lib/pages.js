@@ -20,7 +20,6 @@ export const KNOWN_MODS = new Set([
   "settings",
   "admin",
   "integrations",
-  "price-lists",
   "edgar",
   "expansion",
   "finance",
@@ -36,7 +35,8 @@ export const KNOWN_MODS = new Set([
 export const MOD_ALIASES = {
   home: "briefing",
   campaigns: "prospecting",
-  prices: "price-lists",
+  prices: "edgar",
+  "price-lists": "edgar",
   competitors: "compete",
   "command-center": "cc-ad-hub",
   "ai-knowledge": "integrations",

@@ -19,8 +19,32 @@ export const config = {
   api: { bodyParser: { sizeLimit: "8mb" } },
 };
 
-// Fields that should never be synced (local-session only)
+// Fields that should never be synced (local-session only).
 const EXCLUDE_KEYS = new Set(["currentUserId"]);
+
+// priceLists held uploaded dealer catalogs. The Price Lists screen is gone
+// and quoting reads the ST1 PIM (falling back to PriceItem rows), but the
+// stored blob is historical data and must never be erased by this endpoint:
+//   - clients can no longer write it (dropped from incoming state), and
+//   - every write carries the stored value forward untouched.
+// GET leaves it out of the response only to keep the payload small.
+const PRESERVED_SERVER_KEYS = ["priceLists"];
+
+function omitKeys(state, keys) {
+  if (!state || typeof state !== "object") return state;
+  const out = { ...state };
+  for (const key of keys) delete out[key];
+  return out;
+}
+
+export function carryForwardPreserved(next, previous) {
+  const out = omitKeys(next, PRESERVED_SERVER_KEYS);
+  if (!previous || typeof previous !== "object") return out;
+  for (const key of PRESERVED_SERVER_KEYS) {
+    if (Object.prototype.hasOwnProperty.call(previous, key)) out[key] = previous[key];
+  }
+  return out;
+}
 
 // appUsers[].pin is checked server-side by /api/login and must never reach an
 // unauthenticated browser — a device only needs to know who's pickable, not
@@ -57,7 +81,7 @@ export default async function handler(req, res) {
       const raw = setting.value || {};
       const tombs = applyDealTombstones(raw, raw);
       const contactTombs = applyContactTombstones(raw, raw);
-      return res.json({ state: redactAppUserPins({ ...raw, ...tombs, ...contactTombs }) });
+      return res.json({ state: omitKeys(redactAppUserPins({ ...raw, ...tombs, ...contactTombs }), PRESERVED_SERVER_KEYS) });
     } catch (e) {
       console.error("[state] GET error:", e.message);
       return res.status(500).json({ error: e.message });
@@ -85,7 +109,7 @@ export default async function handler(req, res) {
         const previous = previousRaw && typeof previousRaw === "object" ? previousRaw : {};
         const tombs = applyDealTombstones(clean, previous);
         const contactTombs = applyContactTombstones(clean, previous);
-        return { ...clean, ...tombs, ...contactTombs };
+        return carryForwardPreserved({ ...clean, ...tombs, ...contactTombs }, previous);
       });
       return res.json({ ok: true });
     } catch (e) {

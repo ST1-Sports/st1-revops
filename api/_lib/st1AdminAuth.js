@@ -28,7 +28,7 @@
 
 const API_BASE = process.env.ST1_ADMIN_API_BASE || 'https://api.st1sports.com';
 
-async function signIn() {
+async function signIn({ timeoutMs } = {}) {
   const email = process.env.ST1_ADMIN_SERVICE_EMAIL;
   const password = process.env.ST1_ADMIN_SERVICE_PASSWORD;
   if (!email || !password) {
@@ -38,6 +38,7 @@ async function signIn() {
   const res = await fetch(`${API_BASE}/admin/signin`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
+    ...(timeoutMs ? { signal: AbortSignal.timeout(timeoutMs) } : {}),
     // UNVERIFIED — confirm these field names against a real signin call.
     body: JSON.stringify({ email, password }),
   });
@@ -69,8 +70,10 @@ async function signIn() {
  * reintroduce the 403 problem this is meant to avoid. Call createSession()
  * fresh at the start of every sync run.
  */
-export async function createSession() {
-  let current = await signIn();
+export async function createSession({ timeoutMs } = {}) {
+  // timeoutMs (optional) bounds each sign-in call. Callers that need every
+  // request bounded (the PIM lookups) also pass a per-request signal.
+  let current = await signIn({ timeoutMs });
 
   async function request(path, opts = {}) {
     const doFetch = () => fetch(`${API_BASE}${path}`, {
@@ -80,7 +83,7 @@ export async function createSession() {
 
     let res = await doFetch();
     if (res.status === 403) {
-      current = await signIn();
+      current = await signIn({ timeoutMs });
       res = await doFetch();
     }
     return res;

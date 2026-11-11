@@ -1,5 +1,5 @@
 /**
- * Ranked dealer-list search shared by Scout (get_st1_pricing) and Edgar.
+ * Ranked PIM / catalog search shared by Scout (get_st1_pricing) and Edgar.
  *
  * Naive Prisma OR + alphabetical take() treats "ball" as a match and returns
  * the first 5–60 Athletic Connection rows — never TF-5000. This tokenizer

@@ -5,7 +5,7 @@
 import { setCors } from '../_lib/cors.js';
 import { prisma } from '../_lib/prisma.js';
 import { getConfiguredToolKeys } from '../_lib/ai-tools/auth.js';
-import { listKnowledgeDocuments } from '../_lib/ai-tools/sources.js';
+import { isPimConfigured, listKnowledgeDocuments } from '../_lib/ai-tools/sources.js';
 
 export const config = { maxDuration: 20 };
 
@@ -23,9 +23,8 @@ export default async function handler(req, res) {
   if (req.method !== 'GET') return res.status(405).json({ ok: false, error: 'GET only' });
 
   try {
-    const [documents, priceItems, products, suppliers, contacts, memoryFacts, chatSessions] = await Promise.all([
+    const [documents, products, suppliers, contacts, memoryFacts, chatSessions] = await Promise.all([
       listKnowledgeDocuments().catch(() => []),
-      prisma.priceItem.count().catch(() => 0),
       prisma.product.count().catch(() => 0),
       prisma.supplier.count({ where: { active: true } }).catch(() => 0),
       prisma.salesContact.count().catch(() => 0),
@@ -47,11 +46,11 @@ export default async function handler(req, res) {
         notion: Boolean(process.env.NOTION_API_KEY || process.env.NOTION_TOKEN),
         googleDrive: driveConfigured(),
         zoho: Boolean(process.env.ZOHO_ORG_ID && process.env.ZOHO_REFRESH_TOKEN),
+        pim: isPimConfigured(),
       },
       counts: {
         knowledgeDocs: documents.length,
         knowledgeDocsBySource: bySource,
-        priceItems,
         products,
         suppliers,
         contacts,
@@ -70,6 +69,7 @@ export default async function handler(req, res) {
         notion: Boolean(process.env.NOTION_API_KEY || process.env.NOTION_TOKEN),
         googleDrive: driveConfigured(),
         zoho: Boolean(process.env.ZOHO_ORG_ID && process.env.ZOHO_REFRESH_TOKEN),
+        pim: isPimConfigured(),
       },
       error: e.message,
     });
