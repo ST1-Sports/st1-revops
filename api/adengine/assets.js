@@ -1,9 +1,11 @@
+import { requireCaller } from '../_lib/agentGate.js';
 import { prisma } from '../_lib/prisma.js';
 import { setCors } from '../_lib/cors.js';
 
 export default async function handler(req, res) {
   setCors(res, 'GET, DELETE, OPTIONS');
   if (req.method === 'OPTIONS') return res.status(200).end();
+  if (!(await requireCaller(req, res, { message: 'Sign in to use the Ad Hub.' }))) return;
 
   // ── LIST ────────────────────────────────────────────────────────────────────
   if (req.method === 'GET') {

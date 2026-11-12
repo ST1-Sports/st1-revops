@@ -1,3 +1,4 @@
+import { requireCaller } from "./_lib/agentGate.js";
 /**
  * /api/social-post  — Social media posting via Publer
  *
@@ -73,6 +74,18 @@ function parseSuccess(data, scheduled) {
 
 export default async function handler(req, res) {
   if (req.method !== "POST") return res.status(405).json({ error: "Method not allowed" });
+
+  // Every action reaches the company's live social accounts. The debug actions create real
+  // test posts, so they are admin-only.
+  const debugAction = ["debug-post", "send-verbose"].includes(req.body?.action);
+  if (
+    !(await requireCaller(req, res, {
+      adminOnly: debugAction,
+      message: "Sign in to post to social.",
+      adminMessage: "Only admins can run Publer debug posts.",
+    }))
+  )
+    return;
 
   const apiKey = process.env.PUBLER_API_KEY;
   if (!apiKey) {

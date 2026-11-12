@@ -41,14 +41,18 @@ export function bindCaller(caller) {
 }
 
 /** Writes 401/403 and returns null when the caller may not use this route. */
-export async function requireCaller(req, res, { adminOnly = false } = {}) {
+export async function requireCaller(
+  req,
+  res,
+  { adminOnly = false, message = 'Sign in again to use the agents.', adminMessage = 'Admins only.' } = {},
+) {
   const caller = await resolveCaller(req);
   if (!caller) {
-    res.status(401).json({ error: 'Sign in again to use the agents.' });
+    res.status(401).json({ error: message });
     return null;
   }
   if (adminOnly && !caller.isAdmin) {
-    res.status(403).json({ error: 'Admins only.' });
+    res.status(403).json({ error: adminMessage });
     return null;
   }
   return caller;

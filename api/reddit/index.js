@@ -37,6 +37,7 @@ const { muteSubreddit, muteKeyword } = require('./services/db-guardrails');
 const { refreshAnalytics } = require('./services/analytics');
 const { generateReport } = require('./services/report');
 const { getPrisma } = require('./services/_prisma');
+import { requireCaller } from '../_lib/agentGate.js';
 
 
 /** Resolve feature flags from env vars. @returns {import('./types').RedditFlags} */
@@ -63,6 +64,7 @@ export default async function handler(req, res) {
   cors(res);
   if (req.method === 'OPTIONS') return res.status(200).end();
   if (req.method !== 'POST')    return err(res, 'Method not allowed', 405);
+  if (!(await requireCaller(req, res, { message: 'Sign in to use Reddit.' }))) return;
 
   const { action, ...body } = req.body || {};
   if (!action) return err(res, 'Missing action', 400);

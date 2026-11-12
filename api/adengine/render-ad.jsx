@@ -1,4 +1,5 @@
 import { ImageResponse } from '@vercel/og';
+import { safeImageUrl } from '../_lib/safeImageUrl.js';
 
 export const config = { runtime: 'edge' };
 
@@ -188,7 +189,7 @@ export default async function handler(req) {
   const sub      = q.get('sub')      || '';
   const cta      = q.get('cta')      || '';
   const badge    = q.get('badge')    || '';
-  const img      = q.get('img')      || '';
+  const img      = safeImageUrl(q.get('img'));
   const bg       = decodeURIComponent(q.get('bg') || '%230A0A0A');
   const tc       = decodeURIComponent(q.get('tc') || '%23FFFFFF');
   const ac       = decodeURIComponent(q.get('ac') || '%23F37321');

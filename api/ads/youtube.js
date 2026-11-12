@@ -1,5 +1,6 @@
 import { setCors } from '../_lib/cors.js';
 import { requireInternalSecret } from '../_lib/internalAuth.js';
+import { requireCaller } from '../_lib/agentGate.js';
 
 // YouTube Ads uses the Google Ads API filtered to VIDEO channel type.
 // Same OAuth credentials as google.js — reuses GOOGLE_ADS_* env vars.
@@ -203,6 +204,15 @@ async function createCampaign(campaign) {
 export default async function handler(req, res) {
   setCors(res, 'GET, POST, OPTIONS');
   if (req.method === 'OPTIONS') return res.status(200).end();
+  // Reading needs a signed-in rep; pausing, budgets and creating campaigns spend real money.
+  if (
+    !(await requireCaller(req, res, {
+      adminOnly: req.method !== 'GET',
+      message: 'Sign in to use the Ad Hub.',
+      adminMessage: 'Only admins can change live ad campaigns.',
+    }))
+  )
+    return;
   try {
     if (req.method === 'GET') {
       const { action = 'insights', dateRange = 'last_30_days', level = 'campaign' } = req.query;

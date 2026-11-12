@@ -1,5 +1,6 @@
 import { setCors } from '../_lib/cors.js';
 import { requireInternalSecret } from '../_lib/internalAuth.js';
+import { requireCaller } from '../_lib/agentGate.js';
 
 export const config = { api: { bodyParser: { sizeLimit: '1mb' } } };
 
@@ -178,6 +179,15 @@ function buildMetaTargeting(audience) {
 export default async function handler(req, res) {
   setCors(res, 'GET, POST, OPTIONS');
   if (req.method === 'OPTIONS') return res.status(200).end();
+  // Reading needs a signed-in rep; pausing, budgets and creating campaigns spend real money.
+  if (
+    !(await requireCaller(req, res, {
+      adminOnly: req.method !== 'GET',
+      message: 'Sign in to use the Ad Hub.',
+      adminMessage: 'Only admins can change live ad campaigns.',
+    }))
+  )
+    return;
 
   try {
     if (req.method === 'GET') {
