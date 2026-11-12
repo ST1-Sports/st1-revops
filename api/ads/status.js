@@ -1,3 +1,4 @@
+import { requireCaller } from '../_lib/agentGate.js';
 import { setCors } from '../_lib/cors.js';
 
 // Health-checks each platform by making a minimal API call.
@@ -107,6 +108,7 @@ async function checkGA4() {
 export default async function handler(req, res) {
   setCors(res, 'GET, OPTIONS');
   if (req.method === 'OPTIONS') return res.status(200).end();
+  if (!(await requireCaller(req, res, { message: 'Sign in to use the Ad Hub.' }))) return;
   if (req.method !== 'GET') return res.status(405).json({ error: 'Method not allowed' });
 
   const checks = await Promise.allSettled([

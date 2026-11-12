@@ -1,3 +1,4 @@
+import { requireCaller } from '../_lib/agentGate.js';
 import { prisma } from '../_lib/prisma.js';
 import { setCors } from '../_lib/cors.js';
 
@@ -16,6 +17,15 @@ const UTM_SOURCE_MAP = {
 export default async function handler(req, res) {
   setCors(res, 'GET, POST, OPTIONS');
   if (req.method === 'OPTIONS') return res.status(200).end();
+  // Revenue rows come from the Zoho webhook; adding them by hand is admin-only.
+  if (
+    !(await requireCaller(req, res, {
+      adminOnly: req.method !== 'GET',
+      message: 'Sign in to use the Ad Hub.',
+      adminMessage: 'Only admins can add attribution records.',
+    }))
+  )
+    return;
 
   try {
     // ── GET: fetch attribution records ──────────────────────────────────────

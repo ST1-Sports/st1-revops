@@ -1,3 +1,4 @@
+import { requireCaller } from '../_lib/agentGate.js';
 import { prisma } from '../_lib/prisma.js';
 import { setCors } from '../_lib/cors.js';
 
@@ -30,6 +31,8 @@ const STYLE_NORM = {
 export default async function handler(req, res) {
   setCors(res, 'POST, OPTIONS');
   if (req.method === 'OPTIONS') return res.status(200).end();
+  // Each call is a paid Ideogram generation.
+  if (!(await requireCaller(req, res, { message: 'Sign in to generate images.' }))) return;
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
 
   const apiKey = process.env.IDEOGRAM_API_KEY;
