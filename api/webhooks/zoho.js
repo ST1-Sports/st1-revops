@@ -5,23 +5,6 @@ import { serverCallHeaders } from '../_lib/agentGate.js';
 
 export const config = { api: { bodyParser: { sizeLimit: '1mb' } } };
 
-// Maps Zoho Lead_Source values to ad platform IDs
-const SOURCE_TO_PLATFORM = {
-  'Google Ads':     'google',
-  'Google':         'google',
-  'Facebook':       'meta',
-  'Facebook Ads':   'meta',
-  'Instagram':      'meta',
-  'LinkedIn':       'linkedin',
-  'LinkedIn Ads':   'linkedin',
-  'TikTok':         'tiktok',
-  'TikTok Ads':     'tiktok',
-  'Microsoft Ads':  'microsoft',
-  'Bing Ads':       'microsoft',
-  'YouTube':        'youtube',
-  'YouTube Ads':    'youtube',
-};
-
 export default async function handler(req, res) {
   setCors(res, 'POST, OPTIONS');
   if (req.method === 'OPTIONS') return res.status(200).end();
@@ -40,41 +23,15 @@ export default async function handler(req, res) {
     // Zoho sends either a single object or an array under body.data
     const items = Array.isArray(body.data) ? body.data : body.data ? [body.data] : [body];
 
-    let created = 0;
     for (const item of items) {
       const stage = item.Stage || item.Deal_Stage || item['Stage'];
       if (stage !== 'Closed Won') continue;
 
       const dealId   = item.id   || item.ID   || item.Id;
       const amount   = parseFloat(item.Amount || item.amount || 0);
-      const source   = item.Lead_Source || item['Lead Source'] || '';
-      const campaign = item.Campaign_Name || item['Campaign Name'] || item.Campaign || '';
       const email    = (item.Contact_Email || item['Contact Email'] || item['Email'] || '').toLowerCase().trim();
-      const contactId= item.Contact_Id    || item['Contact Id']    || '';
 
-      const platform = SOURCE_TO_PLATFORM[source] || 'unknown';
-
-      // Ad attribution — isolated so a missing migration doesn't block the feedback loop
-      try {
-        await prisma.ad_attribution.create({
-          data: {
-            platform,
-            platform_campaign_id: campaign || null,
-            zoho_deal_id:         dealId   ? String(dealId) : null,
-            zoho_contact_id:      contactId ? String(contactId) : null,
-            contact_email:        email    || null,
-            attributed_revenue:   amount,
-            attribution_type:     'last_touch',
-            converted_at:         new Date(),
-          },
-        });
-        created++;
-      } catch (e) {
-        if (e.code !== 'P2021' && !e.message?.includes('does not exist')) throw e;
-        // ad_attribution table not yet migrated — skip attribution, continue to feedback loop
-      }
-
-      // Brad feedback loop — always runs regardless of attribution table state
+      // Brad feedback loop — Closed Won deals close out pending Brad outreach
       if (email) {
         try {
           const pending = await prisma.agentInteraction.findMany({
@@ -124,7 +81,7 @@ export default async function handler(req, res) {
       }
     }
 
-    return res.status(200).json({ ok: true, attributionsCreated: created });
+    return res.status(200).json({ ok: true });
   } catch (e) {
     console.error('Zoho webhook error:', e);
     return res.status(500).json({ error: e.message });

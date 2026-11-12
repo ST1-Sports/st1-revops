@@ -20,7 +20,7 @@ const B = {
   redBg:    '#FDECEA',
 }
 
-const TYPE_LABELS = { claude: 'Claude AI', 'claude-search': 'Claude + Search', ideogram: 'Ideogram AI', agent: 'ST1 Agent', webhook: 'Webhook', api: 'API', embed: 'Embed', iframe: 'iFrame' }
+const TYPE_LABELS = { claude: 'Claude AI', 'claude-search': 'Claude + Search', agent: 'ST1 Agent', webhook: 'Webhook', api: 'API', embed: 'Embed', iframe: 'iFrame' }
 
 function pluginStatus(p) {
   if (p.custom) {
@@ -90,7 +90,7 @@ function CapInput({ value, onChange }) {
         onChange={e => setInput(e.target.value)}
         onKeyDown={e => { if (e.key === 'Enter' || e.key === ',') { e.preventDefault(); add(input) } }}
         onBlur={() => input.trim() && add(input)}
-        placeholder={tags.length ? '' : 'copy, social, general… (Enter to add)'}
+        placeholder={tags.length ? '' : 'copy, quote, general… (Enter to add)'}
         style={{ border: 'none', outline: 'none', background: 'transparent', fontSize: 11, fontFamily: "'Lexend',sans-serif", color: B.text, minWidth: 120 }}
       />
     </div>

@@ -12,3 +12,22 @@ describe('price list routes', () => {
     assert.equal(pathToMod('/price-lists'), 'edgar');
   });
 });
+
+describe('removed social and ad hub routes', () => {
+  it('no longer treats social or ad hub as their own modules', () => {
+    assert.equal(KNOWN_MODS.has('social'), false);
+    assert.equal(KNOWN_MODS.has('cc-ad-hub'), false);
+  });
+
+  it('sends old social and ad hub bookmarks to Home', () => {
+    assert.equal(pathToMod('/social'), 'briefing');
+    assert.equal(pathToMod('/cc-ad-hub'), 'briefing');
+    assert.equal(pathToMod('/cc-social'), 'briefing');
+    assert.equal(pathToMod('/cc-image'), 'briefing');
+  });
+
+  it('sends /command-center to the remaining sales-copy tools panel', () => {
+    assert.equal(pathToMod('/command-center'), 'cc-sales-copy');
+    assert.equal(KNOWN_MODS.has('cc-sales-copy'), true);
+  });
+});

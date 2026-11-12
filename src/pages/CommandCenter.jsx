@@ -1,7 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react'
 import { routeTask } from '../lib/aiRouter.js'
-import ToolManagerComponent from '../components/ToolManager.jsx'
-import AdHubModule from '../components/AdHubModule.jsx'
 import AnalyticsWidget from '../components/AnalyticsWidget.jsx'
 
 // ─── BRAND ────────────────────────────────────────────────────────────────────
@@ -25,6 +23,8 @@ const B = {
 }
 
 // ─── HELPERS ──────────────────────────────────────────────────────────────────
+const fmt$ = n => '$' + Number(n || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+
 function getStoredRole() {
   try {
     const raw = localStorage.getItem('st1_revops_v2')
@@ -46,20 +46,6 @@ const MODULES = [
     label: 'Sales Copywriter',
     cap:  'copy',
     desc: 'AI-generated sales copy, one-pagers, and outreach scripts tailored to your deals.',
-  },
-  {
-    id:   'social',
-    icon: '📱',
-    label: 'Social Media',
-    cap:  'social',
-    desc: 'Draft and schedule social posts across Instagram, LinkedIn, Facebook, and more.',
-  },
-  {
-    id:   'image',
-    icon: '🖼',
-    label: 'Image Generator',
-    cap:  'image',
-    desc: 'Generate on-brand images and graphics for campaigns, ads, and social content.',
   },
   {
     id:   'quote',
@@ -88,13 +74,6 @@ const MODULES = [
     label: 'Financial Summaries',
     cap:  'finance',
     desc: 'Summarize revenue, AR, and deal data into concise executive-ready reports.',
-  },
-  {
-    id:   'ad-hub',
-    icon: '📊',
-    label: 'Ad Hub',
-    cap:  'workflow',
-    desc: 'Unified ad analytics, campaign management, and creative launch across all platforms.',
   },
   {
     id:        'analytics',
@@ -292,408 +271,6 @@ function PlaceholderPanel({ mod }) {
     </div>
   )
 }
-
-// ─── SOCIAL MEDIA — unified create → image → post workflow ───────────────────
-const PLATFORMS = ['Instagram', 'Facebook', 'LinkedIn']
-const TONES     = ['Hype', 'Professional', 'Educational']
-const PLATFORM_COLORS = { Instagram: '#E4405F', Facebook: '#1877F2', LinkedIn: '#0A66C2' }
-
-function parseSocial(text, platforms) {
-  try { const p = JSON.parse(text.trim()); if (p && typeof p === 'object') return p } catch {}
-  try { const m = text.match(/\{[\s\S]*\}/); if (m) { const p = JSON.parse(m[0]); if (typeof p === 'object') return p } } catch {}
-  return Object.fromEntries(platforms.map(pl => [pl.toLowerCase(), { caption: text.trim(), hashtags: [] }]))
-}
-
-function SocialModule({ userRole }) {
-  const [selPlatforms, setSelPlatforms] = useState(['Instagram', 'LinkedIn'])
-  const [topic,        setTopic]        = useState('')
-  const [product,      setProduct]      = useState('')
-  const [tone,         setTone]         = useState('Professional')
-  const [generating,   setGenerating]   = useState(false)
-  const [result,       setResult]       = useState(null)
-  const [error,        setError]        = useState(null)
-
-  // Image step
-  const [imageLoading, setImageLoading] = useState(false)
-  const [imageUrl,     setImageUrl]     = useState(null)
-  const [imageError,   setImageError]   = useState(null)
-
-  // Post step
-  const [posting,      setPosting]      = useState(false)
-  const [postResult,   setPostResult]   = useState(null)
-  const [scheduleDate, setScheduleDate] = useState('')
-  const [scheduleTime, setScheduleTime] = useState('09:00')
-
-  function togglePlatform(pl) {
-    setSelPlatforms(prev => prev.includes(pl) ? prev.filter(p => p !== pl) : [...prev, pl])
-  }
-
-  async function generateContent() {
-    if (!topic.trim() || !selPlatforms.length) return
-    setGenerating(true); setError(null); setResult(null); setImageUrl(null); setPostResult(null)
-    const platformList = selPlatforms.join(', ')
-    const task = [
-      `Write optimized social media posts for ${platformList} about: ${topic.trim()}.`,
-      product.trim() ? `Product or brand featured: ${product.trim()}.` : '',
-      `Tone: ${tone}. ST1 Sports athletic equipment brand context.`,
-      'Include platform-appropriate hashtags (5–10 per platform).',
-      `Return JSON only: {${selPlatforms.map(p => `"${p.toLowerCase()}":{"caption":"...","hashtags":["#..."]}`).join(',')}}`,
-    ].filter(Boolean).join(' ')
-    try {
-      const r = await routeTask({ task, input: { platforms: selPlatforms, topic, product, tone }, userRole })
-      setResult(parseSocial(r.output || '', selPlatforms))
-    } catch(e) {
-      setError(e.message)
-    } finally {
-      setGenerating(false)
-    }
-  }
-
-  async function generateImage() {
-    setImageLoading(true); setImageError(null); setImageUrl(null)
-    try {
-      // Claude builds the image prompt from the topic/product context
-      const promptRes = await routeTask({
-        task: `Create a professional social media image prompt for ST1 Sports. Topic: ${topic.trim()}. ${product.trim() ? `Featured: ${product.trim()}.` : ''} Athletic/sports marketing, ST1 orange (#F37321) and black brand colors, bold commercial quality. Return ONLY the image prompt — no preamble.`,
-        input: { topic, product },
-        userRole,
-      })
-      const builtPrompt = (promptRes.output || '').trim()
-      const imgRes = await fetch('/api/adengine/generate-product-image', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ prompt: builtPrompt, style: 'REALISTIC', sizeKey: 'square' }),
-      })
-      const imgData = await imgRes.json()
-      if (!imgRes.ok) throw new Error(imgData.error || `Image API error ${imgRes.status}`)
-      setImageUrl(imgData.imageUrl)
-    } catch(e) {
-      setImageError(e.message)
-    } finally {
-      setImageLoading(false)
-    }
-  }
-
-  async function postToPubler() {
-    setPosting(true); setPostResult(null)
-    try {
-      // Use first selected platform's caption as the primary text
-      const primaryKey = selPlatforms[0]?.toLowerCase()
-      const primaryData = result?.[primaryKey] || {}
-      const tags = Array.isArray(primaryData.hashtags) ? primaryData.hashtags : []
-      const caption = primaryData.caption + (tags.length ? '\n\n' + tags.join(' ') : '')
-
-      let scheduleDateTime = null
-      if (scheduleDate) {
-        const off = new Date().getTimezoneOffset()
-        const sign = off <= 0 ? '+' : '-'
-        const hh = String(Math.floor(Math.abs(off)/60)).padStart(2,'0')
-        const mm = String(Math.abs(off)%60).padStart(2,'0')
-        scheduleDateTime = `${scheduleDate}T${scheduleTime}:00${sign}${hh}:${mm}`
-      }
-
-      const r = await fetch('/api/social-post', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          post: caption,
-          platforms: selPlatforms,
-          mediaUrls: imageUrl ? [imageUrl] : undefined,
-          scheduleDate: scheduleDateTime || undefined,
-        }),
-      })
-      const d = await r.json()
-      if (d.ok || d.postIds || d.jobId) {
-        setPostResult({ ok: true, scheduled: !!scheduleDate, platforms: selPlatforms })
-      } else {
-        throw new Error(d.error || 'Post failed — check Publer connection in Settings')
-      }
-    } catch(e) {
-      setPostResult({ ok: false, error: e.message })
-    } finally {
-      setPosting(false)
-    }
-  }
-
-  const canPost = result && selPlatforms.length > 0
-
-  return (
-    <div style={{ padding: 28, overflowY: 'auto', flex: 1 }}>
-      <ModHeader icon="📱" label="Social" desc="Write content, generate a matching image, and post — all in one flow." />
-
-      {/* ── STEP 1: COMPOSE ─────────────────────────────────────────────── */}
-      <Card>
-        <Field label="PLATFORMS *">
-          <div style={{ display: 'flex', gap: 6 }}>
-            {PLATFORMS.map(pl => {
-              const active = selPlatforms.includes(pl)
-              return (
-                <button key={pl} onClick={() => togglePlatform(pl)}
-                  style={{ background: active ? PLATFORM_COLORS[pl] : B.surface, color: active ? B.white : B.muted, border: `1px solid ${active ? PLATFORM_COLORS[pl] : B.border}`, borderRadius: 6, padding: '6px 14px', fontSize: 11, fontFamily: "'Lexend',sans-serif", cursor: 'pointer', fontWeight: active ? 600 : 400 }}>
-                  {pl}
-                </button>
-              )
-            })}
-          </div>
-        </Field>
-
-        <Row2>
-          <Field label="TOPIC *">
-            <Inp value={topic} onChange={e => setTopic(e.target.value)} placeholder="New baseball season gear, track meet prep…" />
-          </Field>
-          <Field label="PRODUCT OR BRAND">
-            <Inp value={product} onChange={e => setProduct(e.target.value)} placeholder="Wilson A2000, DeMarini CF, BWTF…" />
-          </Field>
-        </Row2>
-
-        <Field label="TONE">
-          <div style={{ display: 'flex', gap: 6 }}>
-            {TONES.map(t => (
-              <button key={t} onClick={() => setTone(t)}
-                style={{ background: tone === t ? B.orange : B.surface, color: tone === t ? B.white : B.muted, border: `1px solid ${tone === t ? B.orange : B.border}`, borderRadius: 6, padding: '6px 14px', fontSize: 11, fontFamily: "'Lexend',sans-serif", cursor: 'pointer', fontWeight: tone === t ? 600 : 400 }}>
-                {t}
-              </button>
-            ))}
-          </div>
-        </Field>
-
-        <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 4 }}>
-          <GenBtn onClick={generateContent} loading={generating} disabled={!topic.trim() || !selPlatforms.length} />
-        </div>
-      </Card>
-
-      <ErrMsg msg={error} />
-
-      {/* ── STEP 2: CONTENT RESULTS + IMAGE ─────────────────────────────── */}
-      {result && (
-        <>
-          {selPlatforms.map(pl => {
-            const key  = pl.toLowerCase()
-            const data = result[key]
-            if (!data) return null
-            const color = PLATFORM_COLORS[pl]
-            const tags  = Array.isArray(data.hashtags) ? data.hashtags : []
-            const full  = data.caption + (tags.length ? '\n\n' + tags.join(' ') : '')
-            return (
-              <Card key={pl}>
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
-                  <span style={{ fontFamily: "'Lexend Zetta',sans-serif", fontSize: 8, color, letterSpacing: 2 }}>{pl.toUpperCase()}</span>
-                  <CopyBtn text={full} />
-                </div>
-                <div style={{ fontFamily: "'Lexend',sans-serif", fontSize: 12, color: B.text, lineHeight: 1.75, whiteSpace: 'pre-wrap', marginBottom: 10 }}>
-                  {data.caption}
-                </div>
-                {tags.length > 0 && (
-                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
-                    {tags.map((tag, i) => (
-                      <span key={i} style={{ fontFamily: "'Lexend',sans-serif", fontSize: 10, color, background: `${color}12`, border: `1px solid ${color}30`, borderRadius: 4, padding: '2px 7px' }}>{tag}</span>
-                    ))}
-                  </div>
-                )}
-              </Card>
-            )
-          })}
-
-          {/* Image generation */}
-          <Card>
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: imageUrl ? 10 : 0 }}>
-              <div>
-                <div style={{ fontFamily: "'Lexend Zetta',sans-serif", fontSize: 8, color: B.muted, letterSpacing: 2, marginBottom: 2 }}>MATCHING IMAGE</div>
-                <div style={{ fontFamily: "'Lexend',sans-serif", fontSize: 11, color: B.muted }}>Generate an on-brand visual to post with your content</div>
-              </div>
-              {!imageUrl && (
-                <GenBtn onClick={generateImage} loading={imageLoading} label={imageLoading ? 'GENERATING…' : 'GENERATE IMAGE →'} />
-              )}
-              {imageUrl && (
-                <div style={{ display: 'flex', gap: 6 }}>
-                  <button onClick={generateImage} disabled={imageLoading}
-                    style={{ background: B.surface, border: `1px solid ${B.border}`, color: B.muted, borderRadius: 5, padding: '5px 12px', fontSize: 10, cursor: 'pointer', fontFamily: "'Lexend Zetta',sans-serif" }}>
-                    ↺ REDO
-                  </button>
-                  <button onClick={() => { const a = document.createElement('a'); a.href = imageUrl; a.download = `st1-social-${Date.now()}.jpg`; a.click() }}
-                    style={{ background: B.orange, color: B.white, border: 'none', borderRadius: 5, padding: '5px 12px', fontSize: 10, cursor: 'pointer', fontFamily: "'Lexend Zetta',sans-serif" }}>
-                    ↓ DOWNLOAD
-                  </button>
-                </div>
-              )}
-            </div>
-            <ErrMsg msg={imageError} />
-            {imageUrl && <img src={imageUrl} alt="Generated" style={{ width: '100%', borderRadius: 8, display: 'block', marginTop: 10 }} />}
-          </Card>
-
-          {/* ── STEP 3: POST ─────────────────────────────────────────────── */}
-          <Card style={{ borderTop: `3px solid ${B.orange}` }}>
-            <div style={{ fontFamily: "'Lexend Zetta',sans-serif", fontSize: 8, color: B.orange, letterSpacing: 2, marginBottom: 12 }}>POST TO PUBLER</div>
-
-            <Row2>
-              <Field label="SCHEDULE DATE (optional — leave blank to post now)">
-                <Inp type="date" value={scheduleDate} onChange={e => setScheduleDate(e.target.value)}
-                  min={new Date().toISOString().slice(0, 10)} />
-              </Field>
-              {scheduleDate && (
-                <Field label="TIME">
-                  <Inp type="time" value={scheduleTime} onChange={e => setScheduleTime(e.target.value)} />
-                </Field>
-              )}
-            </Row2>
-
-            <div style={{ marginBottom: 10, fontFamily: "'Lexend',sans-serif", fontSize: 11, color: B.muted }}>
-              Posting to: {selPlatforms.join(', ')}
-              {imageUrl ? ' · with image' : ' · no image'}
-              {scheduleDate ? ` · scheduled ${scheduleDate} ${scheduleTime}` : ' · immediately'}
-            </div>
-
-            <button onClick={postToPubler} disabled={posting || !canPost}
-              style={{ width: '100%', background: (posting || !canPost) ? B.gray2 : B.orange, color: B.white, border: 'none', borderRadius: 6, padding: '12px', fontSize: 12, fontFamily: "'Russo One',sans-serif", letterSpacing: .5, cursor: (posting || !canPost) ? 'default' : 'pointer' }}>
-              {posting ? 'POSTING…' : scheduleDate ? '⏰ SCHEDULE POST →' : '▶ POST NOW →'}
-            </button>
-
-            {postResult?.ok && (
-              <div style={{ marginTop: 10, background: B.greenBg, border: `1px solid ${B.green}30`, borderRadius: 6, padding: '10px 14px', fontFamily: "'Lexend',sans-serif", fontSize: 12, color: B.green }}>
-                ✓ {postResult.scheduled ? `Scheduled for ${scheduleDate} at ${scheduleTime}` : 'Posted successfully'} to {postResult.platforms?.join(', ')}
-              </div>
-            )}
-            {postResult?.error && <ErrMsg msg={postResult.error} />}
-          </Card>
-        </>
-      )}
-    </div>
-  )
-}
-
-// ─── IMAGE GENERATOR ─────────────────────────────────────────────────────────
-const USE_CASES = ['Product Promo','Social Post','Email Banner','Event Flyer']
-const MOODS     = ['Bold','Clean','Energetic']
-
-const MOOD_STYLE = { Bold:'DESIGN', Clean:'REALISTIC', Energetic:'REALISTIC' }
-const CASE_SIZE  = { 'Product Promo':'square', 'Social Post':'square', 'Email Banner':'landscape', 'Event Flyer':'story' }
-
-function ImageModule({ userRole }) {
-  const [useCase,   setUseCase]   = useState('Product Promo')
-  const [product,   setProduct]   = useState('')
-  const [mood,      setMood]      = useState('Clean')
-  const [colors,    setColors]    = useState('')
-  const [loading,   setLoading]   = useState(false)
-  const [imageUrl,  setImageUrl]  = useState(null)
-  const [prompt,    setPrompt]    = useState('')
-  const [error,     setError]     = useState(null)
-
-  async function generate() {
-    if (!product.trim()) return
-    setLoading(true); setError(null); setImageUrl(null); setPrompt('')
-
-    // Step 1 — Claude builds the image prompt via routeTask
-    const task = [
-      `Create an image generation prompt for a "${useCase}" for ST1 Sports athletic equipment brand.`,
-      `Featured product or brand: ${product.trim()}.`,
-      `Visual mood: ${mood}. Brand colors: orange (#F37321) and black.`,
-      colors.trim() ? `Additional colors: ${colors.trim()}.` : '',
-      'Athletic sports marketing context. Professional commercial quality.',
-      'Return ONLY the image prompt text — no preamble, no explanation.',
-    ].filter(Boolean).join(' ')
-
-    try {
-      const r = await routeTask({ task, input: { useCase, product, mood, colors }, userRole })
-      const builtPrompt = (r.output || '').trim()
-      setPrompt(builtPrompt)
-
-      // Step 2 — call image API with the generated prompt
-      const imgRes = await fetch('/api/adengine/generate-product-image', {
-        method:  'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify({
-          prompt:  builtPrompt,
-          style:   MOOD_STYLE[mood] || 'REALISTIC',
-          sizeKey: CASE_SIZE[useCase] || 'square',
-        }),
-      })
-      const imgData = await imgRes.json()
-      if (!imgRes.ok) throw new Error(imgData.error || `Image API error ${imgRes.status}`)
-      setImageUrl(imgData.imageUrl)
-    } catch(e) {
-      setError(e.message)
-    } finally {
-      setLoading(false)
-    }
-  }
-
-  function download() {
-    if (!imageUrl) return
-    const a = document.createElement('a')
-    a.href = imageUrl
-    a.download = `st1-${useCase.toLowerCase().replace(/\s+/g,'-')}-${Date.now()}.jpg`
-    a.click()
-  }
-
-  return (
-    <div style={{ padding:28, overflowY:'auto', flex:1 }}>
-      <ModHeader icon="🖼" label="Image Generator" desc="Builds an ST1-branded image prompt via AI, then generates the image with Ideogram." />
-
-      <Card>
-        <Row2>
-          <Field label="USE CASE">
-            <Sel value={useCase} onChange={e=>setUseCase(e.target.value)}>
-              {USE_CASES.map(u=><option key={u}>{u}</option>)}
-            </Sel>
-          </Field>
-          <Field label="PRODUCT OR BRAND *">
-            <Inp value={product} onChange={e=>setProduct(e.target.value)} placeholder="Wilson A2000, DeMarini CF, BWTF…" />
-          </Field>
-        </Row2>
-
-        <Field label="MOOD">
-          <div style={{ display:'flex', gap:6 }}>
-            {MOODS.map(m => (
-              <button key={m} onClick={()=>setMood(m)} style={{ background:mood===m?B.orange:B.surface, color:mood===m?B.white:B.muted, border:`1px solid ${mood===m?B.orange:B.border}`, borderRadius:6, padding:'6px 16px', fontSize:11, fontFamily:"'Lexend',sans-serif", cursor:'pointer', fontWeight:mood===m?600:400 }}>
-                {m}
-              </button>
-            ))}
-          </div>
-        </Field>
-
-        <Field label="ACCENT COLORS (optional)">
-          <Inp value={colors} onChange={e=>setColors(e.target.value)} placeholder="e.g. navy blue, gold, white…" />
-        </Field>
-
-        <div style={{ display:'flex', justifyContent:'flex-end', marginTop:4 }}>
-          <GenBtn onClick={generate} loading={loading} disabled={!product.trim()} label={loading ? 'GENERATING…' : 'GENERATE IMAGE →'} />
-        </div>
-      </Card>
-
-      <ErrMsg msg={error} />
-
-      {/* Generated prompt (shown for reference) */}
-      {prompt && !imageUrl && (
-        <Card>
-          <div style={{ fontFamily:"'Lexend Zetta',sans-serif", fontSize:7, color:B.muted, letterSpacing:1.5, marginBottom:6 }}>GENERATED PROMPT</div>
-          <div style={{ fontFamily:"'Lexend',sans-serif", fontSize:11, color:B.text, lineHeight:1.6 }}>{prompt}</div>
-        </Card>
-      )}
-
-      {/* Output image */}
-      {imageUrl && (
-        <Card>
-          <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:12 }}>
-            <span style={{ fontFamily:"'Lexend Zetta',sans-serif", fontSize:8, color:B.orange, letterSpacing:2 }}>GENERATED IMAGE</span>
-            <div style={{ display:'flex', gap:8 }}>
-              <CopyBtn text={prompt} label="COPY PROMPT" />
-              <button onClick={download} style={{ background:B.orange, color:B.white, border:'none', borderRadius:4, padding:'4px 12px', fontSize:9, fontFamily:"'Lexend Zetta',sans-serif", letterSpacing:.5, cursor:'pointer' }}>
-                DOWNLOAD ↓
-              </button>
-            </div>
-          </div>
-          <img src={imageUrl} alt="Generated" style={{ width:'100%', borderRadius:8, display:'block' }} />
-          <div style={{ marginTop:10, fontFamily:"'Lexend',sans-serif", fontSize:10, color:B.muted, lineHeight:1.5 }}>
-            <strong>Prompt:</strong> {prompt}
-          </div>
-        </Card>
-      )}
-    </div>
-  )
-}
-
-// ─── SMART QUOTE BUILDER ─────────────────────────────────────────────────────
-const fmt$ = n => '$' + Number(n||0).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})
 
 function QuoteModule() {
   const [query,      setQuery]      = useState(()=>{ const p=sessionStorage.getItem("st1_quote_prefill"); if(p){sessionStorage.removeItem("st1_quote_prefill");return p;} return ""; })
@@ -1179,16 +756,6 @@ function FinancialModule({ userRole }) {
   )
 }
 
-// ─── MODULE 7: TOOL MANAGER (admin) ──────────────────────────────────────────
-function ToolManagerModule() {
-  return (
-    <div>
-      <ModHeader icon="⚙" label="Tool Manager" desc="Configure plugins, manage API keys, and control which tools each role can access." />
-      <ToolManagerComponent />
-    </div>
-  )
-}
-
 // ─── PRICE LIST INTEL ────────────────────────────────────────────────────────
 const COMPETITOR_LIST = [
   'BSN Sports', 'Varsity Brands', 'School Specialty', 'Epic Sports',
@@ -1307,22 +874,18 @@ function PriceIntelModule({ userRole }) {
   )
 }
 
-function ActivePanel({ mod, userRole, s, dispatch, toast }) {
+function ActivePanel({ mod, userRole }) {
   if (mod.id === 'sales-copy')   return <SalesCopyModule   userRole={userRole} />
-  if (mod.id === 'social')       return <SocialModule       userRole={userRole} />
-  if (mod.id === 'image')        return <ImageModule        userRole={userRole} />
   if (mod.id === 'quote')        return <QuoteModule        userRole={userRole} />
   if (mod.id === 'price-intel')  return <PriceIntelModule   userRole={userRole} />
   if (mod.id === 'research')     return <ResearchModule     userRole={userRole} />
   if (mod.id === 'finance')      return <FinancialModule    userRole={userRole} />
-  if (mod.id === 'ad-hub')       return <AdHubModule       userRole={userRole} s={s} dispatch={dispatch} toast={toast} />
   if (mod.id === 'analytics')    return <AnalyticsWidget />
-  if (mod.id === 'tool-manager') return <ToolManagerModule />
   return <PlaceholderPanel mod={mod} />
 }
 
 // ─── MAIN COMPONENT ───────────────────────────────────────────────────────────
-export default function CommandCenter({ initialModuleId = 'sales-copy', embedded = false, s, dispatch, toast }) {
+export default function CommandCenter({ initialModuleId = 'sales-copy', embedded = false }) {
   const userRole      = getStoredRole()
   const [activeId, setActiveId] = useState(initialModuleId)
   const [slim,     setSlim]     = useState(false)
@@ -1332,8 +895,30 @@ export default function CommandCenter({ initialModuleId = 'sales-copy', embedded
 
   if (embedded) {
     return (
-      <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', background: B.pageBg, fontFamily: "'Lexend',sans-serif", color: B.text }}>
-        {activeMod && <ActivePanel mod={activeMod} userRole={userRole} s={s} dispatch={dispatch} toast={toast} key={activeMod.id} />}
+      <div style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column', background: B.pageBg, fontFamily: "'Lexend',sans-serif", color: B.text }}>
+        <div style={{ display: 'flex', gap: 2, padding: '8px 16px 0', borderBottom: `1px solid ${B.border}`, background: B.white, flexShrink: 0, overflowX: 'auto' }}>
+          {visibleModules.map(m => {
+            const active = m.id === activeMod?.id
+            return (
+              <button
+                key={m.id}
+                onClick={() => setActiveId(m.id)}
+                style={{
+                  background: 'none', border: 'none',
+                  borderBottom: `2px solid ${active ? B.orange : 'transparent'}`,
+                  color: active ? B.orange : B.muted,
+                  padding: '8px 12px', fontSize: 11, fontWeight: active ? 500 : 400,
+                  whiteSpace: 'nowrap',
+                }}
+              >
+                {m.icon} {m.label}
+              </button>
+            )
+          })}
+        </div>
+        <div style={{ flex: 1, overflowY: 'auto' }}>
+          {activeMod && <ActivePanel mod={activeMod} userRole={userRole} key={activeMod.id} />}
+        </div>
       </div>
     )
   }
@@ -1520,7 +1105,7 @@ export default function CommandCenter({ initialModuleId = 'sales-copy', embedded
         {/* Panel */}
         <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column' }}>
           {activeMod && (
-            <ActivePanel mod={activeMod} userRole={userRole} s={s} dispatch={dispatch} toast={toast} key={activeMod.id} />
+            <ActivePanel mod={activeMod} userRole={userRole} key={activeMod.id} />
           )}
         </div>
       </div>

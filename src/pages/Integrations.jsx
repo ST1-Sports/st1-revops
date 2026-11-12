@@ -3,7 +3,7 @@ import { useNavigate, useLocation, Link } from "react-router-dom";
 import ToolManager from "../components/ToolManager.jsx";
 import { integrationsPath } from "../lib/pages.js";
 
-const INTG_TABS = new Set(["overview","knowledge","slack","zoho","marketing","ads","email","shopify","tools","log"]);
+const INTG_TABS = new Set(["overview","knowledge","slack","zoho","marketing","email","shopify","tools","log"]);
 import { pushItemsToAppState, pushAppStateToServer, readAppState } from "../lib/appStateSync.js";
 import { internalAuthHeaders } from "../lib/internalAuth.js";
 import AiKnowledgeHub from "./AiKnowledgeHub.jsx";
@@ -174,13 +174,6 @@ export default function IntegrationsHub({ initialTab = "overview" }) {
   const [zohoEmailCampaigns, setZohoEmailCampaigns] = useState([]);
   const [campaignCreating, setCampaignCreating] = useState(false);
   const [newListName, setNewListName] = useState("Cold Leads — Promo Offers");
-
-  // Ad platforms
-  const [adsStatus, setAdsStatus]   = useState(() => { try { const s=JSON.parse(localStorage.getItem("st1_ads_status_v1")||"{}"); return (Date.now()-(s.ts||0))<3600000?s:{}; } catch { return {}; } });
-  const [adsLoading, setAdsLoading] = useState(false);
-  const [lsEmbedUrl, setLsEmbedUrl]   = useState(() => { try { return localStorage.getItem("st1_ls_embed")||""; } catch { return ""; } });
-  const [adLinks, setAdLinks]         = useState(() => { try { return JSON.parse(localStorage.getItem("st1_ad_links")||"{}"); } catch { return {}; } });
-  const [adMetrics, setAdMetrics]     = useState(() => { try { return JSON.parse(localStorage.getItem("st1_ad_metrics")||"{}"); } catch { return {}; } });
 
   const [gmailStatus, setGmailStatus] = useState(() => !!(loadStatus().gmail));
   const [emailMessages, setEmailMessages] = useState([]);
@@ -927,21 +920,6 @@ export default function IntegrationsHub({ initialTab = "overview" }) {
     setTesting(null);
   };
 
-  const loadAdsStatus = async () => {
-    setAdsLoading(true);
-    try {
-      const r = await fetch("/api/ads/status");
-      const d = await r.json();
-      setAdsStatus(d);
-      try { localStorage.setItem("st1_ads_status_v1", JSON.stringify({...d,ts:Date.now()})); } catch {}
-      const connected = Object.values(d).filter(v=>v?.status==="connected").length;
-      addLog(`Ad platforms: ${connected} connected`, connected>0?"success":"info");
-    } catch(e) {
-      addLog(`Ads status: ${e.message.slice(0,80)}`,"error");
-    }
-    setAdsLoading(false);
-  };
-
   const scanEmailInbox = async () => {
     setEmailScanning(true); setEmailOpps([]); setEmailMessages([]);
     addLog("Fetching recent emails from Gmail...");
@@ -1206,9 +1184,6 @@ Channel: ${slackChannelName}`);
             ["Zoho CRM",    status.crm,                                    "#E42527"],
             ["Campaigns",   status.campaigns,                              "#E42527"],
             ["Gmail",       gmailStatus,                                   "#EA4335"],
-            ["Meta Ads",    adsStatus.meta?.status==="connected",          "#1877F2"],
-            ["Google Ads",  adsStatus.google?.status==="connected",        "#4285F4"],
-            ["LinkedIn",    adsStatus.linkedin?.status==="connected",      "#0A66C2"],
             ["Shopify",     status.shopify,                                "#95BF47"],
           ].map(([l,ok,c])=>(
             <div key={l} style={{display:"flex",alignItems:"center",gap:4}}>
@@ -1221,7 +1196,7 @@ Channel: ${slackChannelName}`);
 
       {/* NAV */}
       <div style={{background:B.white,borderBottom:`1px solid ${B.border}`,padding:"0 28px",display:"flex",gap:2}}>
-        {[["overview","Overview"],["knowledge","AI Knowledge"],["slack","Slack"],["zoho","Zoho Books + CRM"],["marketing","Marketing"],["ads","Ad Platforms"],["email","Email Scanner"],["shopify","Shopify"],["tools","AI Tools"],["log","Activity Log"]].map(([id,label])=>(
+        {[["overview","Overview"],["knowledge","AI Knowledge"],["slack","Slack"],["zoho","Zoho Books + CRM"],["marketing","Marketing"],["email","Email Scanner"],["shopify","Shopify"],["tools","AI Tools"],["log","Activity Log"]].map(([id,label])=>(
           <button key={id} onClick={()=>setTab(id)} style={{background:"none",border:"none",borderBottom:`2px solid ${tab===id?B.orange:"transparent"}`,color:tab===id?B.orange:B.muted,padding:"10px 14px",fontFamily:"'Lexend',sans-serif",fontSize:11,fontWeight:tab===id?500:400}}>
             {label}
           </button>
@@ -1318,40 +1293,6 @@ Channel: ${slackChannelName}`);
                     Add docs, see what is connected, test ST1 tools, and prepare knowledge for Claude/OpenAI/MCP agents.
                   </div>
                   <OBtn sm onClick={()=>setTab("knowledge")}>OPEN HUB →</OBtn>
-                </div>
-
-                {/* Ad platforms */}
-                <div style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:8,padding:16,borderLeft:`4px solid ${Object.values(adsStatus).some(v=>v?.status==="connected")?"#1877F2":B.border}`}}>
-                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
-                    <div style={{display:"flex",gap:9,alignItems:"center"}}>
-                      <span style={{fontSize:22}}>📣</span>
-                      <div>
-                        <div style={{fontFamily:"'Russo One',sans-serif",fontSize:13,color:B.black}}>Ad Platforms</div>
-                        <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>Meta · Google · LinkedIn · TikTok · Microsoft</div>
-                      </div>
-                    </div>
-                    <div style={{display:"flex",flexDirection:"column",gap:2,alignItems:"flex-end"}}>
-                      <span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:Object.values(adsStatus).filter(v=>v?.status==="connected").length>0?B.green:B.muted}}>
-                        {Object.values(adsStatus).filter(v=>v?.status==="connected").length} / 6 connected
-                      </span>
-                    </div>
-                  </div>
-                  <div style={{display:"flex",gap:8,flexWrap:"wrap",marginBottom:9}}>
-                    {[
-                      {k:"meta",l:"Meta",c:"#1877F2"},
-                      {k:"google",l:"Google",c:"#4285F4"},
-                      {k:"linkedin",l:"LinkedIn",c:"#0A66C2"},
-                      {k:"tiktok",l:"TikTok",c:"#010101"},
-                      {k:"microsoft",l:"Bing",c:"#00A4EF"},
-                      {k:"ga4",l:"GA4",c:"#E37400"},
-                    ].map(({k,l,c})=>(
-                      <span key={k} style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,padding:"2px 7px",borderRadius:10,letterSpacing:.5,
-                        color:adsStatus[k]?.status==="connected"?B.white:B.muted,
-                        background:adsStatus[k]?.status==="connected"?c:B.surface,
-                        border:`1px solid ${adsStatus[k]?.status==="connected"?c:B.border}`}}>{l}</span>
-                    ))}
-                  </div>
-                  <OBtn sm onClick={()=>setTab("ads")}>CONFIGURE →</OBtn>
                 </div>
 
                 {/* Quick actions */}
@@ -1800,7 +1741,7 @@ Channel: ${slackChannelName}`);
             <div className="fu">
               <div style={{marginBottom:20}}>
                 <div style={{fontFamily:"'Russo One',sans-serif",fontSize:20,color:B.black,letterSpacing:.3}}>MARKETING AUTOMATION</div>
-                <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,marginTop:2}}>Zoho Campaigns for email · Ayrshare for social publishing · Cold lead nurture automation</div>
+                <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,marginTop:2}}>Zoho Campaigns for email · Cold lead nurture automation</div>
                 <div style={{width:32,height:3,background:B.orange,marginTop:7,borderRadius:2}}/>
               </div>
 
@@ -2020,9 +1961,6 @@ Channel: ${slackChannelName}`);
                   </div>
                 )}
               </div>
-
-              {/* ── SOCIAL PUBLISHING (Ayrshare) ────────────────────────────── */}
-              <AyrsharePanel addLog={addLog}/>
 
             </div>
           )}
@@ -2269,15 +2207,6 @@ Channel: ${slackChannelName}`);
             </div>
           )}
 
-          {/* ── ADS ── */}
-          {tab==="ads"&&<AdsTab
-            adsStatus={adsStatus} adsLoading={adsLoading} loadAdsStatus={loadAdsStatus}
-            lsEmbedUrl={lsEmbedUrl} setLsEmbedUrl={v=>{setLsEmbedUrl(v);try{localStorage.setItem("st1_ls_embed",v);}catch{}}}
-            adLinks={adLinks} setAdLinks={v=>{setAdLinks(v);try{localStorage.setItem("st1_ad_links",JSON.stringify(v));}catch{}}}
-            adMetrics={adMetrics} setAdMetrics={v=>{setAdMetrics(v);try{localStorage.setItem("st1_ad_metrics",JSON.stringify(v));}catch{}}}
-            B={B} OBtn={OBtn}
-          />}
-
           {/* ── AI TOOLS ── */}
           {tab==="tools"&&(
             <div className="fu">
@@ -2325,11 +2254,6 @@ Channel: ${slackChannelName}`);
             {l:"Zoho Books",   c:B.red,   desc:"Invoice & AR data",       ok:status.books},
             {l:"Zoho CRM",     c:B.red,   desc:"Contact sync",            ok:status.crm},
             {l:"Campaigns",    c:B.red,   desc:"Email lists",             ok:status.campaigns},
-            {l:"Meta Ads",     c:"#1877F2",desc:"Facebook/Instagram ads", ok:adsStatus.meta?.status==="connected"},
-            {l:"Google Ads",   c:"#4285F4",desc:"Search & Display ads",   ok:adsStatus.google?.status==="connected"},
-            {l:"LinkedIn Ads", c:"#0A66C2",desc:"B2B ad targeting",       ok:adsStatus.linkedin?.status==="connected"},
-            {l:"TikTok Ads",   c:"#010101",desc:"Video ad campaigns",     ok:adsStatus.tiktok?.status==="connected"},
-            {l:"GA4",          c:"#E37400",desc:"Analytics & attribution", ok:adsStatus.ga4?.status==="connected"},
             {l:"Shopify",      c:"#95BF47",desc:"Products & orders",      ok:status.shopify},
           ].map(k=>(
             <div key={k.l} style={{padding:"8px 0",borderBottom:`1px solid ${B.border}`,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
@@ -2370,483 +2294,6 @@ Channel: ${slackChannelName}`);
 }
 
 // ─── AD PLATFORMS TAB ────────────────────────────────────────────────────────
-function AdsTab({adsStatus,adsLoading,loadAdsStatus,lsEmbedUrl,setLsEmbedUrl,adLinks,setAdLinks,adMetrics,setAdMetrics,B,OBtn}) {
-  const PLATFORMS = [
-    {key:"meta",     label:"Meta Ads",       icon:"📘", color:"#1877F2", defaultUrl:"https://adsmanager.facebook.com/adsmanager/reporting/view", desc:"Facebook & Instagram"},
-    {key:"google",   label:"Google Ads",     icon:"🔍", color:"#4285F4", defaultUrl:"https://ads.google.com/aw/overview", desc:"Search, Display, Shopping"},
-    {key:"linkedin", label:"LinkedIn Ads",   icon:"💼", color:"#0A66C2", defaultUrl:"https://www.linkedin.com/campaignmanager/", desc:"B2B audience targeting"},
-    {key:"tiktok",   label:"TikTok Ads",     icon:"🎵", color:"#010101", defaultUrl:"https://ads.tiktok.com/i18n/dashboard", desc:"Short-form video ads"},
-    {key:"microsoft",label:"Microsoft Ads",  icon:"🔷", color:"#00A4EF", defaultUrl:"https://ui.ads.microsoft.com/campaign/vnext/overview", desc:"Bing Search"},
-    {key:"ga4",      label:"Google Analytics",icon:"📊",color:"#E37400", defaultUrl:"https://analytics.google.com/", desc:"Website analytics & attribution"},
-  ];
-  const METRIC_FIELDS = [
-    {k:"spend",  label:"Spend",   prefix:"$", suffix:""},
-    {k:"roas",   label:"ROAS",    prefix:"",  suffix:"x"},
-    {k:"leads",  label:"Leads",   prefix:"",  suffix:""},
-    {k:"clicks", label:"Clicks",  prefix:"",  suffix:""},
-  ];
-  const [editMetrics, setEditMetrics] = useState(null);
-  const [apiOpen, setApiOpen]         = useState(false);
-
-  const API_VARS = [
-    {key:"meta",      color:"#1877F2", vars:["META_ACCESS_TOKEN","META_AD_ACCOUNT_ID"], note:"Requires Meta developer app + System User. See developers.facebook.com."},
-    {key:"google",    color:"#4285F4", vars:["GOOGLE_ADS_CLIENT_ID","GOOGLE_ADS_CLIENT_SECRET","GOOGLE_ADS_REFRESH_TOKEN","GOOGLE_ADS_DEVELOPER_TOKEN","GOOGLE_ADS_CUSTOMER_ID"], note:"Apply for developer token at ads.google.com → Tools → API Center."},
-    {key:"linkedin",  color:"#0A66C2", vars:["LINKEDIN_ACCESS_TOKEN","LINKEDIN_AD_ACCOUNT_ID"], note:"Create LinkedIn Marketing Developer Platform app at developer.linkedin.com."},
-    {key:"tiktok",    color:"#010101", vars:["TIKTOK_ACCESS_TOKEN","TIKTOK_ADVERTISER_ID"], note:"Create TikTok for Business app at ads.tiktok.com → Tools → Developer Portal."},
-    {key:"microsoft", color:"#00A4EF", vars:["MICROSOFT_ADS_CLIENT_ID","MICROSOFT_ADS_CLIENT_SECRET","MICROSOFT_ADS_REFRESH_TOKEN","MICROSOFT_ADS_DEVELOPER_TOKEN","MICROSOFT_ADS_CUSTOMER_ID","MICROSOFT_ADS_ACCOUNT_ID"], note:"Register app at apps.dev.microsoft.com; request developer token at ads.microsoft.com."},
-    {key:"ga4",       color:"#E37400", vars:["GA4_PROPERTY_ID","GOOGLE_ANALYTICS_REFRESH_TOKEN"], note:"Enable Analytics Data API in console.cloud.google.com. Reuses Google Ads OAuth creds if already set."},
-  ];
-
-  return (
-    <div className="fu">
-      <div style={{marginBottom:20}}>
-        <div style={{fontFamily:"'Russo One',sans-serif",fontSize:20,color:B.black,letterSpacing:.3}}>AD PLATFORMS</div>
-        <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,marginTop:2}}>Quick access to your ad dashboards · report embed · manual KPI tracking</div>
-        <div style={{width:32,height:3,background:B.orange,marginTop:7,borderRadius:2}}/>
-      </div>
-
-      {/* ── SECTION 1: PLATFORM QUICK LINKS ── */}
-      <div style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:8,padding:16,marginBottom:14}}>
-        <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.muted,letterSpacing:2,marginBottom:12}}>QUICK LINKS — OPEN YOUR AD DASHBOARDS</div>
-        <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,marginBottom:14,lineHeight:1.6}}>
-          Paste in your account-specific URLs (or use the defaults). Opens the platform's native reporting in a new tab — no API setup needed.
-        </div>
-        <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(280px,1fr))",gap:10}}>
-          {PLATFORMS.map(p=>{
-            const apiOk = adsStatus[p.key]?.status==="connected";
-            const url = adLinks[p.key]||p.defaultUrl;
-            return (
-              <div key={p.key} style={{background:B.surface,border:`1px solid ${B.border}`,borderRadius:6,padding:12}}>
-                <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:8}}>
-                  <div style={{display:"flex",gap:8,alignItems:"center"}}>
-                    <span style={{fontSize:16}}>{p.icon}</span>
-                    <div>
-                      <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,fontWeight:500}}>{p.label}</div>
-                      <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{p.desc}</div>
-                    </div>
-                  </div>
-                  {apiOk&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.green,background:B.greenBg,padding:"2px 5px",borderRadius:8,flexShrink:0}}>API ✓</span>}
-                </div>
-                <input
-                  value={adLinks[p.key]||""}
-                  onChange={e=>setAdLinks({...adLinks,[p.key]:e.target.value})}
-                  placeholder={p.defaultUrl}
-                  style={{width:"100%",boxSizing:"border-box",background:B.white,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"5px 8px",fontSize:10,fontFamily:"monospace",marginBottom:8}}
-                />
-                <a href={url} target="_blank" rel="noreferrer"
-                  style={{display:"block",background:p.color,color:"#fff",textDecoration:"none",textAlign:"center",borderRadius:4,padding:"6px 0",fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,fontWeight:700,letterSpacing:.5}}>
-                  OPEN {p.label.toUpperCase()} →
-                </a>
-              </div>
-            );
-          })}
-        </div>
-      </div>
-
-      {/* ── SECTION 2: LOOKER STUDIO EMBED ── */}
-      <div style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:8,padding:16,marginBottom:14,borderLeft:"4px solid #4285F4"}}>
-        <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:10}}>
-          <div>
-            <div style={{fontFamily:"'Russo One',sans-serif",fontSize:14,color:B.black}}>LOOKER STUDIO REPORT EMBED</div>
-            <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginTop:1}}>Free · No developer account needed · Connects Meta, Google, LinkedIn and more via built-in connectors</div>
-          </div>
-          <a href="https://lookerstudio.google.com" target="_blank" rel="noreferrer"
-            style={{background:B.surface,color:B.blue,border:`1px solid ${B.border}`,borderRadius:4,padding:"5px 12px",fontSize:10,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,textDecoration:"none",flexShrink:0}}>
-            OPEN LOOKER STUDIO ↗
-          </a>
-        </div>
-
-        <div style={{background:B.blueBg,border:`1px solid ${B.blue}30`,borderRadius:5,padding:"10px 12px",marginBottom:12}}>
-          <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.blue,letterSpacing:1.5,marginBottom:5}}>WHY LOOKER STUDIO</div>
-          <div style={{display:"flex",flexDirection:"column",gap:3,fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,lineHeight:1.6}}>
-            <div>→ <strong>No developer app needed</strong> — connects with your normal Google/Meta/LinkedIn login</div>
-            <div>→ Free Google product — create reports that pull live data from every ad platform</div>
-            <div>→ Paste the share URL below and the report embeds directly here</div>
-          </div>
-        </div>
-
-        <div style={{marginBottom:10}}>
-          <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:2,marginBottom:4}}>LOOKER STUDIO REPORT EMBED URL</div>
-          <div style={{display:"flex",gap:8}}>
-            <input
-              value={lsEmbedUrl}
-              onChange={e=>setLsEmbedUrl(e.target.value)}
-              placeholder="https://lookerstudio.google.com/embed/reporting/XXXXXXXX/page/XXXXXXXX"
-              style={{flex:1,background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 10px",fontSize:11,fontFamily:"monospace"}}
-            />
-            {lsEmbedUrl&&<button onClick={()=>setLsEmbedUrl("")} style={{background:"none",border:`1px solid ${B.border}`,color:B.muted,borderRadius:4,padding:"0 10px",fontSize:11,cursor:"pointer"}}>✕</button>}
-          </div>
-          <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginTop:4}}>
-            In Looker Studio: File → Share → Embed report → copy the <code style={{background:"#f0f0f0",padding:"1px 4px",borderRadius:2}}>src</code> URL from the iframe code
-          </div>
-        </div>
-
-        {lsEmbedUrl ? (
-          <div style={{borderRadius:6,overflow:"hidden",border:`1px solid ${B.border}`,background:B.surface}}>
-            <iframe src={lsEmbedUrl} width="100%" height="600" frameBorder="0" allowFullScreen
-              style={{display:"block"}}
-              sandbox="allow-storage-access-by-user-activation allow-scripts allow-same-origin allow-popups allow-popups-to-escape-sandbox"/>
-          </div>
-        ) : (
-          <div style={{background:B.surface,borderRadius:6,padding:"30px 0",textAlign:"center",border:`1px solid ${B.border}`}}>
-            <div style={{fontSize:28,marginBottom:8}}>📊</div>
-            <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.muted}}>Paste your Looker Studio embed URL above to show the report here</div>
-          </div>
-        )}
-      </div>
-
-      {/* ── SECTION 3: MANUAL KPI TRACKING ── */}
-      <div style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:8,padding:16,marginBottom:14}}>
-        <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.muted,letterSpacing:2,marginBottom:4}}>MANUAL KPI TRACKING</div>
-        <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,marginBottom:14}}>
-          Copy numbers from each platform and paste them here for a quick weekly snapshot.
-        </div>
-        <div style={{display:"flex",flexDirection:"column",gap:8}}>
-          {PLATFORMS.filter(p=>p.key!=="ga4").map(p=>{
-            const m = adMetrics[p.key]||{};
-            const isEditing = editMetrics===p.key;
-            return (
-              <div key={p.key} style={{background:B.surface,border:`1px solid ${B.border}`,borderRadius:6,padding:12}}>
-                <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:isEditing?10:0}}>
-                  <div style={{display:"flex",gap:8,alignItems:"center"}}>
-                    <span>{p.icon}</span>
-                    <span style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,fontWeight:500}}>{p.label}</span>
-                  </div>
-                  {!isEditing&&(
-                    <div style={{display:"flex",gap:12,alignItems:"center"}}>
-                      {METRIC_FIELDS.filter(f=>m[f.k]).map(f=>(
-                        <div key={f.k} style={{textAlign:"right"}}>
-                          <div style={{fontFamily:"'Russo One',sans-serif",fontSize:13,color:p.color}}>{f.prefix}{m[f.k]}{f.suffix}</div>
-                          <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.muted,letterSpacing:1}}>{f.label.toUpperCase()}</div>
-                        </div>
-                      ))}
-                      <button onClick={()=>setEditMetrics(p.key)}
-                        style={{background:"none",border:`1px solid ${B.border}`,color:B.muted,borderRadius:4,padding:"4px 9px",fontSize:10,cursor:"pointer",fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700}}>
-                        {Object.keys(m).length?"EDIT":"+ ADD"}
-                      </button>
-                    </div>
-                  )}
-                </div>
-                {isEditing&&(
-                  <div>
-                    <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:8,marginBottom:8}}>
-                      {METRIC_FIELDS.map(f=>(
-                        <div key={f.k}>
-                          <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.muted,letterSpacing:1.5,marginBottom:3}}>{f.label.toUpperCase()}</div>
-                          <input
-                            value={m[f.k]||""}
-                            onChange={e=>setAdMetrics({...adMetrics,[p.key]:{...m,[f.k]:e.target.value}})}
-                            placeholder={f.prefix+"0"+f.suffix}
-                            style={{width:"100%",boxSizing:"border-box",background:B.white,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"5px 7px",fontSize:11,fontFamily:"'Lexend',sans-serif"}}
-                          />
-                        </div>
-                      ))}
-                    </div>
-                    <div style={{display:"flex",gap:7}}>
-                      <OBtn sm onClick={()=>setEditMetrics(null)}>SAVE</OBtn>
-                      <button onClick={()=>{const n={...adMetrics};delete n[p.key];setAdMetrics(n);setEditMetrics(null);}}
-                        style={{background:"none",border:`1px solid ${B.border}`,color:B.muted,borderRadius:4,padding:"4px 9px",fontSize:9,cursor:"pointer",fontFamily:"'Lexend',sans-serif"}}>
-                        clear
-                      </button>
-                    </div>
-                  </div>
-                )}
-              </div>
-            );
-          })}
-        </div>
-      </div>
-
-      {/* ── SECTION 4: API INTEGRATION (ADVANCED) ── */}
-      <details style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:8}}>
-        <summary style={{padding:16,cursor:"pointer",listStyle:"none",display:"flex",justifyContent:"space-between",alignItems:"center"}}
-          onClick={()=>setApiOpen(o=>!o)}>
-          <div>
-            <div style={{fontFamily:"'Russo One',sans-serif",fontSize:13,color:B.black}}>API INTEGRATION (ADVANCED)</div>
-            <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginTop:2}}>For automated data pulls, budget control, and Slack alerts — requires developer app setup per platform</div>
-          </div>
-          <div style={{display:"flex",gap:10,alignItems:"center"}}>
-            <OBtn sm onClick={e=>{e.stopPropagation();loadAdsStatus();}} disabled={adsLoading}>{adsLoading?"...":"↻ TEST ALL"}</OBtn>
-            <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.muted,letterSpacing:1}}>{apiOpen?"▲ COLLAPSE":"▸ EXPAND"}</span>
-          </div>
-        </summary>
-        <div style={{padding:"0 16px 16px"}}>
-          <div style={{background:B.yellowBg,border:`1px solid ${B.yellow}40`,borderRadius:5,padding:"9px 12px",marginBottom:14,fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text}}>
-            <strong>Note:</strong> Meta requires creating a Facebook developer app (free at developers.facebook.com) and getting a System User token — typically takes 15–30 min. Other platforms have similar requirements. For read-only results, the Looker Studio embed above is easier.
-          </div>
-          <div style={{display:"flex",flexDirection:"column",gap:10}}>
-            {API_VARS.map(p=>{
-              const s=adsStatus[p.key];
-              const ok=s?.status==="connected";
-              const err=s?.status==="error";
-              return (
-                <div key={p.key} style={{background:B.surface,border:`1px solid ${B.border}`,borderRadius:6,padding:12,borderLeft:`3px solid ${ok?B.green:err?"#f97316":p.color}`}}>
-                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
-                    <span style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,fontWeight:500}}>
-                      {PLATFORMS.find(pl=>pl.key===p.key)?.icon} {PLATFORMS.find(pl=>pl.key===p.key)?.label}
-                    </span>
-                    {ok&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.green,background:B.greenBg,padding:"2px 7px",borderRadius:8}}>✓ CONNECTED{s.name?` · ${s.name}`:""}</span>}
-                    {err&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:"#f97316",background:"#fff7ed",padding:"2px 7px",borderRadius:8}}>⚠ {s.message?.slice(0,60)}</span>}
-                    {!ok&&!err&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,background:B.surface,padding:"2px 7px",borderRadius:8,border:`1px solid ${B.border}`}}>NOT SET</span>}
-                  </div>
-                  <div style={{display:"flex",flexWrap:"wrap",gap:6,marginBottom:6}}>
-                    {p.vars.map(v=>(
-                      <code key={v} style={{fontFamily:"monospace",fontSize:9,color:p.color,background:`${p.color}10`,padding:"2px 6px",borderRadius:3,border:`1px solid ${p.color}30`}}>{v}</code>
-                    ))}
-                  </div>
-                  <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,lineHeight:1.5}}>{p.note}</div>
-                </div>
-              );
-            })}
-          </div>
-        </div>
-      </details>
-    </div>
-  );
-}
-
-// ─── DIRECT SOCIAL PUBLISHING ─────────────────────────────────────────────────
-function AyrsharePanel({addLog}) {
-  const [testing, setTesting]   = useState(false);
-  const [testResult, setTestResult] = useState(null);
-  const [profiles, setProfiles] = useState([]);
-  const [loadingProfiles, setLoadingProfiles] = useState(false);
-
-  const safePost = async (body) => {
-    const r = await fetch("/api/social-post", { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify(body) });
-    let data;
-    try { data = await r.json(); } catch {
-      const txt = await r.text().catch(()=>"");
-      if (!r.ok || txt.toLowerCase().includes("publer_api_key") || txt.toLowerCase().includes("server error")) {
-        throw new Error("PUBLER_API_KEY not set in Vercel — add it under Settings → Environment Variables, then redeploy.");
-      }
-      throw new Error(txt || `Server error ${r.status}`);
-    }
-    return data;
-  };
-
-  const testConnection = async () => {
-    setTesting(true); setTestResult(null);
-    try {
-      const data = await safePost({action:"test"});
-      if (data.ok) {
-        setTestResult({ok:true, user: data.user, workspaces: data.workspaces||[], firstWorkspaceId: data.firstWorkspaceId});
-        addLog("Publer connected ✓","success");
-        try { const st=JSON.parse(localStorage.getItem("st1_integrations_status_v1")||"{}"); localStorage.setItem("st1_integrations_status_v1",JSON.stringify({...st,social:true})); } catch {}
-      } else {
-        setTestResult({ok:false, error: data.error || "Connection failed"});
-        addLog(`Publer: ${data.error}`,"error");
-      }
-    } catch(e) { setTestResult({ok:false, error:e.message}); }
-    setTesting(false);
-  };
-
-  const loadProfiles = async () => {
-    setLoadingProfiles(true); setProfiles([]);
-    try {
-      const data = await safePost({action:"profiles"});
-      if (data.ok) { setProfiles(data.profiles||[]); addLog(`Loaded ${data.profiles?.length||0} Publer accounts`,"success"); }
-      else { addLog(`Failed: ${data.error}`,"error"); }
-    } catch(e) { addLog(e.message,"error"); }
-    setLoadingProfiles(false);
-  };
-
-  // ── Compose / publish ───────────────────────────────────────────────────
-  const [composeText, setComposeText] = useState("");
-  const [composePlatforms, setComposePlatforms] = useState([]);
-  const [composeSchedule, setComposeSchedule] = useState(""); // empty = post ASAP (backend defaults to ~2 min out)
-  const [composing, setComposing] = useState(false);
-  const [composeResult, setComposeResult] = useState(null);
-
-  const togglePlatform = (p) => setComposePlatforms(prev => prev.includes(p) ? prev.filter(x=>x!==p) : [...prev,p]);
-
-  const publishPost = async () => {
-    if (!composeText.trim()) { addLog("Enter post text first","warn"); return; }
-    if (!composePlatforms.length) { addLog("Select at least one platform","warn"); return; }
-    setComposing(true); setComposeResult(null);
-    try {
-      const data = await safePost({
-        post: composeText.trim(),
-        platforms: composePlatforms,
-        ...(composeSchedule ? { scheduleDate: new Date(composeSchedule).toISOString() } : {}),
-      });
-      if (data.postIds?.length || data.status === "scheduled") {
-        setComposeResult({ok:true, ...data});
-        addLog(`✓ Post ${composeSchedule?"scheduled":"queued"} — ${composePlatforms.join(", ")}`,"success");
-        setComposeText(""); setComposePlatforms([]); setComposeSchedule("");
-      } else {
-        setComposeResult({ok:false, error: data.error || data._missing || "Post failed"});
-        addLog(`Publish failed: ${data.error||data._missing}`,"error");
-      }
-    } catch(e) {
-      setComposeResult({ok:false, error:e.message});
-      addLog(`Publish failed: ${e.message}`,"error");
-    }
-    setComposing(false);
-  };
-
-  const [debugResult, setDebugResult] = useState(null);
-  const [debugging, setDebugging] = useState(false);
-  const debugPost = async () => {
-    setDebugging(true); setDebugResult(null);
-    try {
-      const r = await fetch("/api/social-post", {method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"debug-post"})});
-      const d = await r.json();
-      setDebugResult(d);
-      addLog(`Debug post: HTTP ${d.httpStatus} — ${d.rawResponse?.slice(0,120)}`,"info");
-    } catch(e) { addLog(e.message,"error"); }
-    setDebugging(false);
-  };
-
-  const NET_COLORS = {twitter:"#000",facebook:"#1877F2",instagram:"#E1306C",linkedin:"#0A66C2",tiktok:"#000"};
-  const NET_ICONS  = {twitter:"𝕏",facebook:"f",instagram:"📷",linkedin:"in",tiktok:"T"};
-
-  return (
-    <div style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:8,padding:16,marginBottom:14,borderLeft:"4px solid #6B3FA0"}}>
-      <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:12}}>
-        <div>
-          <div style={{fontFamily:"'Russo One',sans-serif",fontSize:14,color:B.black}}>SOCIAL PUBLISHING · PUBLER</div>
-          <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginTop:1}}>Schedule and post to Instagram, Facebook, LinkedIn, Twitter/X, TikTok · from $12/mo · No app creation needed</div>
-        </div>
-        <button onClick={testConnection} disabled={testing}
-          style={{background:testing?B.surface:"#6B3FA0",color:testing?B.muted:B.white,border:"none",borderRadius:4,padding:"6px 14px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,cursor:"pointer",fontWeight:700,letterSpacing:.5,whiteSpace:"nowrap"}}>
-          {testing?"TESTING…":"TEST CONNECTION"}
-        </button>
-      </div>
-
-      {testResult?.ok&&(
-        <div style={{background:B.greenBg,border:`1px solid ${B.green}40`,borderRadius:6,padding:"10px 12px",marginBottom:12,fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.green,lineHeight:1.6}}>
-          ✓ <strong>Publer connected</strong>{testResult.user?.name ? ` — ${testResult.user.name}` : ""}
-          {testResult.workspaces?.length>0&&(
-            <div style={{marginTop:8,borderTop:"1px solid #b7e4ca",paddingTop:8}}>
-              <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,letterSpacing:1,marginBottom:6}}>WORKSPACE IDs — add to Vercel as PUBLER_WORKSPACE_ID</div>
-              {testResult.workspaces.map(w=>(
-                <div key={w.id} style={{display:"flex",justifyContent:"space-between",background:"#d4f0e0",borderRadius:4,padding:"4px 8px",marginBottom:4,fontFamily:"monospace",fontSize:10}}>
-                  <span style={{color:"#1a6b40"}}>{w.name||"Workspace"}</span>
-                  <span style={{userSelect:"all",color:"#1a6b40",fontWeight:700}}>{w.id}</span>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-      )}
-      {testResult?.ok===false&&(
-        <div style={{background:B.redBg,border:`1px solid ${B.red}40`,borderRadius:6,padding:"10px 12px",marginBottom:12,fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.red}}>
-          ✗ {testResult.error}
-        </div>
-      )}
-
-      <div style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:6,padding:"14px 16px",marginBottom:12}}>
-        <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:"#6B3FA0",letterSpacing:1.5,marginBottom:10}}>COMPOSE POST</div>
-        <textarea
-          value={composeText} onChange={e=>setComposeText(e.target.value)}
-          placeholder="What do you want to post?" rows={3}
-          style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,borderRadius:5,padding:"8px 10px",fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,resize:"vertical",marginBottom:10,boxSizing:"border-box"}}
-        />
-        <div style={{display:"flex",gap:6,flexWrap:"wrap",marginBottom:10}}>
-          {(profiles.length ? [...new Set(profiles.map(p=>p.service).filter(Boolean))] : Object.keys(NET_COLORS)).map(p=>(
-            <label key={p} style={{display:"flex",alignItems:"center",gap:5,background:composePlatforms.includes(p)?`${NET_COLORS[p]||"#888"}18`:B.surface,border:`1px solid ${composePlatforms.includes(p)?(NET_COLORS[p]||"#888"):B.border}`,borderRadius:5,padding:"5px 10px",cursor:"pointer",fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.text}}>
-              <input type="checkbox" checked={composePlatforms.includes(p)} onChange={()=>togglePlatform(p)} style={{margin:0}}/>
-              {NET_ICONS[p]||"?"} {p.toUpperCase()}
-            </label>
-          ))}
-        </div>
-        <div style={{display:"flex",gap:10,alignItems:"center",flexWrap:"wrap"}}>
-          <div>
-            <label style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.muted,letterSpacing:1,display:"block",marginBottom:3}}>SCHEDULE (optional — blank posts ASAP)</label>
-            <input type="datetime-local" value={composeSchedule} onChange={e=>setComposeSchedule(e.target.value)}
-              style={{background:B.surface,border:`1px solid ${B.border}`,borderRadius:5,padding:"6px 9px",fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text}}/>
-          </div>
-          <button onClick={publishPost} disabled={composing}
-            style={{background:composing?B.surface:"#6B3FA0",color:composing?B.muted:B.white,border:"none",borderRadius:5,padding:"8px 18px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,cursor:"pointer",fontWeight:700,letterSpacing:.5,alignSelf:"flex-end"}}>
-            {composing?"PUBLISHING…":composeSchedule?"SCHEDULE POST":"PUBLISH NOW"}
-          </button>
-        </div>
-        {composeResult?.ok&&(
-          <div style={{background:B.greenBg,border:`1px solid ${B.green}40`,borderRadius:5,padding:"8px 11px",marginTop:10,fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.green}}>
-            ✓ {composeResult.scheduled?`Scheduled for ${new Date(composeResult.scheduledAt).toLocaleString()}`:"Queued"}
-            {composeResult._warning&&<div style={{marginTop:3,color:B.yellow}}>{composeResult._warning}</div>}
-          </div>
-        )}
-        {composeResult?.ok===false&&(
-          <div style={{background:B.redBg,border:`1px solid ${B.red}40`,borderRadius:5,padding:"8px 11px",marginTop:10,fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.red}}>
-            ✗ {composeResult.error}
-          </div>
-        )}
-      </div>
-
-      <div style={{background:B.surface,border:`1px solid ${B.border}`,borderRadius:6,padding:"14px 16px",fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text}}>
-        <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.orange,letterSpacing:1.5,marginBottom:12}}>SETUP</div>
-        {[
-          {n:"1",title:"Create Publer account (Business plan required)",body:<>Sign up at <a href="https://publer.com" target="_blank" rel="noreferrer" style={{color:"#6B3FA0",fontWeight:700}}>publer.com</a> — <strong>API requires Business plan</strong>. Connect your social accounts in the Publer dashboard.</>},
-          {n:"2",title:"Get your API key",body:<>In Publer, go to <strong>Settings → API</strong> → copy your <strong>API Key</strong>.</>},
-          {n:"3",title:"Add API key to Vercel + redeploy",body:<>Add to Vercel env vars:<br/><code style={{background:"#f0f0f0",padding:"2px 7px",borderRadius:3,fontFamily:"monospace",fontSize:10,display:"inline-block",marginTop:4}}>PUBLER_API_KEY = your_key_here</code><br/><span style={{color:B.muted,fontSize:10}}>Redeploy → click <strong>Test Connection</strong> — your workspace ID will appear above.</span></>},
-          {n:"4",title:"Add workspace ID to Vercel + redeploy",body:<>Copy the workspace ID shown after Test Connection and add it:<br/><code style={{background:"#f0f0f0",padding:"2px 7px",borderRadius:3,fontFamily:"monospace",fontSize:10,display:"inline-block",marginTop:4}}>PUBLER_WORKSPACE_ID = your_workspace_id</code><br/><span style={{color:B.muted,fontSize:10}}>Redeploy → then click Load Accounts below.</span></>},
-          {n:"5",title:"Load accounts → add IDs to Vercel",body:<>Click <strong>Load Accounts</strong> below to see your connected social account IDs, then add each one to Vercel as shown.</>},
-        ].map(({n,title,body})=>(
-          <div key={n} style={{display:"flex",gap:10,marginBottom:14,alignItems:"flex-start"}}>
-            <div style={{width:22,height:22,borderRadius:"50%",background:B.orange,color:B.white,fontFamily:"'Russo One',sans-serif",fontSize:10,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0,marginTop:1}}>{n}</div>
-            <div style={{flex:1}}><div style={{fontWeight:600,marginBottom:3}}>{title}</div><div style={{color:B.muted,lineHeight:1.7,fontSize:10}}>{body}</div></div>
-          </div>
-        ))}
-
-        <div style={{borderTop:`1px solid ${B.border}`,paddingTop:12,marginTop:4}}>
-          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10,gap:8,flexWrap:"wrap"}}>
-            <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.orange,letterSpacing:1}}>YOUR PUBLER ACCOUNTS</div>
-            <div style={{display:"flex",gap:6}}>
-              <button onClick={loadProfiles} disabled={loadingProfiles}
-                style={{background:loadingProfiles?B.surface:B.orangeBg,color:loadingProfiles?B.muted:B.orange,border:`1px solid ${B.orange}40`,borderRadius:4,padding:"5px 12px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,cursor:"pointer",fontWeight:700,letterSpacing:.5}}>
-                {loadingProfiles?"LOADING…":"⟳ LOAD ACCOUNTS"}
-              </button>
-              <button onClick={debugPost} disabled={debugging}
-                style={{background:debugging?B.surface:"#1a1a1a",color:debugging?B.muted:"#00ff88",border:"1px solid #00ff8840",borderRadius:4,padding:"5px 12px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,cursor:"pointer",fontWeight:700,letterSpacing:.5}}>
-                {debugging?"TESTING…":"🔬 DEBUG POST"}
-              </button>
-            </div>
-          </div>
-          {debugResult&&(
-            <div style={{background:"#0a0a0a",border:"1px solid #00ff8840",borderRadius:5,padding:"10px 12px",marginBottom:10,fontFamily:"monospace",fontSize:10,color:"#00ff88",overflowX:"auto"}}>
-              <div style={{color:"#888",marginBottom:4}}>HTTP {debugResult.httpStatus} · account: {debugResult.accountUsed} · workspace: {debugResult.workspaceId}</div>
-              <div style={{color:"#aaa",marginBottom:2,fontSize:9}}>CREATE:</div>
-              <div style={{color:"#fff",wordBreak:"break-all",whiteSpace:"pre-wrap",marginBottom:6}}>{debugResult.createResponse||debugResult.rawResponse||"(empty)"}</div>
-              {debugResult.existingScheduled&&<><div style={{color:"#aaa",marginBottom:2,fontSize:9}}>EXISTING SCHEDULED:</div><div style={{color:"#fff",wordBreak:"break-all",whiteSpace:"pre-wrap"}}>{debugResult.existingScheduled}</div></>}
-            </div>
-          )}
-          {profiles.length>0&&(
-            <div style={{display:"flex",flexDirection:"column",gap:6}}>
-              {profiles.map(p=>(
-                <div key={p.id} style={{display:"flex",alignItems:"center",gap:10,background:B.white,border:`1px solid ${B.border}`,borderRadius:5,padding:"8px 11px"}}>
-                  <div style={{width:8,height:8,borderRadius:"50%",background:p.connected?"#1E8F4E":"#ccc",flexShrink:0}}/>
-                  <div style={{width:26,height:26,borderRadius:4,background:`${NET_COLORS[p.service]||"#888"}18`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:12,flexShrink:0}}>
-                    {NET_ICONS[p.service]||"?"}
-                  </div>
-                  <div style={{flex:1}}>
-                    <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,fontWeight:500}}>{p.name}</div>
-                    <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:NET_COLORS[p.service]||B.muted,letterSpacing:.5}}>{(p.service||"").toUpperCase()}</div>
-                  </div>
-                  <div style={{textAlign:"right"}}>
-                    <div style={{fontFamily:"monospace",fontSize:9,color:B.muted,userSelect:"all",marginBottom:2}}>{p.id}</div>
-                    <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.muted}}>
-                      → <code style={{background:"#f0f0f0",padding:"1px 4px",borderRadius:2}}>PUBLER_ACCOUNT_{(p.service||"").toUpperCase()}</code>
-                    </div>
-                  </div>
-                </div>
-              ))}
-              <div style={{background:B.purpleBg,borderRadius:5,padding:"9px 12px",fontSize:10,color:B.purple,marginTop:4,lineHeight:1.6}}>
-                Copy each ID and add to Vercel as the env var shown (e.g. <code style={{background:"#e8dcf5",padding:"1px 4px",borderRadius:2}}>PUBLER_ACCOUNT_INSTAGRAM = 123456</code>). Redeploy and posts will route to the right accounts.
-              </div>
-            </div>
-          )}
-          {profiles.length===0&&!loadingProfiles&&(
-            <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,textAlign:"center",padding:"10px 0"}}>Add your API key to Vercel, redeploy, then click Load Accounts</div>
-          )}
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// ─── INLINE PRICE EDITOR ──────────────────────────────────────────────────────
 function PriceEditor({product,onSave}) {
   const [editing,setEditing]=useState(false);
   const [val,setVal]=useState(product.price);

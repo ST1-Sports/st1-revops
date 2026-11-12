@@ -54,40 +54,6 @@ const BUILT_INS = [
     },
   },
   {
-    id:           'st1-social',
-    name:         'Social Media',
-    capabilities: ['social'],
-    type:         'claude',
-    roles:        ['admin', 'manager', 'sales_rep'],
-    requiresKeys: [],
-    enabled:      true,
-    handler: async (task) => {
-      const output = await aiCall(task, {
-        sys:    ST1_CTX + ' You are a social media content specialist. Write platform-appropriate copy with relevant hashtags.',
-        tokens: 1500,
-      })
-      return { output, metadata: {} }
-    },
-  },
-  {
-    id:           'st1-image',
-    name:         'Image Generator',
-    capabilities: ['image'],
-    type:         'ideogram',
-    roles:        ['admin', 'manager', 'sales_rep'],
-    requiresKeys: ['IDEOGRAM_API_KEY'],
-    enabled:      true,
-    handler: async (task) => {
-      // Returns a crafted image prompt — CommandCenter calls the image API with it
-      const output = await aiCall(task, {
-        sys:    'You create concise, vivid image generation prompts for athletic sports marketing. ' +
-                'Include mood, setting, lighting, and composition details. Return ONLY the prompt text, no preamble.',
-        tokens: 300,
-      })
-      return { output, metadata: { type: 'image_prompt' } }
-    },
-  },
-  {
     id:           'st1-research',
     name:         'Research & Intel',
     capabilities: ['research'],
