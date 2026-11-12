@@ -13,7 +13,7 @@ const DEV_KEY  = typeof import.meta !== 'undefined' ? (import.meta.env?.VITE_ANT
 const ENDPOINT = IS_DEV ? 'https://api.anthropic.com/v1/messages' : '/api/claude'
 
 const VALID_SLUGS = new Set([
-  'copy', 'quote', 'finance', 'email', 'social', 'image',
+  'copy', 'quote', 'finance', 'email',
   'research', 'web-search', 'competitor-intel', 'code-execution',
   'video-clips', 'database', 'workflow', 'general',
   'prospecting', 'outreach', 'invoice', 'reconcile', 'vendor-bill', 'payments',
@@ -21,13 +21,13 @@ const VALID_SLUGS = new Set([
 ])
 
 const TEXT_CAPABILITIES = new Set([
-  'copy', 'quote', 'finance', 'email', 'social', 'general',
+  'copy', 'quote', 'finance', 'email', 'general',
 ])
 
 const CLASSIFIER_SYSTEM =
   'You are a task classifier. Given a user task description, return ' +
   'ONLY a single capability slug from this list: copy, quote, finance, email, ' +
-  'social, image, research, web-search, competitor-intel, code-execution, ' +
+  'research, web-search, competitor-intel, code-execution, ' +
   'video-clips, database, workflow, general, prospecting, outreach, invoice, reconcile, vendor-bill, payments, ' +
   'forecast, health, digest, ask. ' +
   'Return nothing else. ' +
@@ -111,7 +111,7 @@ export async function routeTask({ task, input, userRole = 'sales_rep' }) {
  * Route a task and stream the response for text-based capabilities.
  * Yields `{ text, done, pluginUsed, capability, metadata? }` objects.
  *
- * Text capabilities (streamed): copy, quote, finance, email, social, general.
+ * Text capabilities (streamed): copy, quote, finance, email, general.
  * Other capabilities: executed normally, result yielded as a single done chunk.
  *
  * Plugin handlers may return:

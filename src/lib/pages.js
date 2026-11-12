@@ -12,7 +12,6 @@ export const KNOWN_MODS = new Set([
   "reorder",
   "prospecting",
   "bulk-outreach",
-  "social",
   "reddit",
   "compete",
   "agent",
@@ -27,7 +26,7 @@ export const KNOWN_MODS = new Set([
   "team-store-statement",
   "team-store-reconcile",
   "flagship-store",
-  "cc-ad-hub",
+  "cc-sales-copy",
   "calendar",
   "marketing",
 ]);
@@ -38,7 +37,11 @@ export const MOD_ALIASES = {
   prices: "edgar",
   "price-lists": "edgar",
   competitors: "compete",
-  "command-center": "cc-ad-hub",
+  "command-center": "cc-sales-copy",
+  social: "briefing",
+  "cc-ad-hub": "briefing",
+  "cc-social": "briefing",
+  "cc-image": "briefing",
   "ai-knowledge": "integrations",
 };
 

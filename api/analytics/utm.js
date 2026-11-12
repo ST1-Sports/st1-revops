@@ -7,7 +7,7 @@ export const config = { api: { bodyParser: { sizeLimit: '1mb' } } };
 export default async function handler(req, res) {
   setCors(res, 'GET, POST, DELETE, OPTIONS');
   if (req.method === 'OPTIONS') return res.status(200).end();
-  if (!(await requireCaller(req, res, { message: 'Sign in to use the Ad Hub.' }))) return;
+  if (!(await requireCaller(req, res, { message: 'Sign in to use analytics.' }))) return;
 
   try {
     // ── GET: list saved UTM links ────────────────────────────────────────────

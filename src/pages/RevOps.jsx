@@ -207,8 +207,6 @@ activity: [],
 integrations: {zohoToken:"",zohoCrmToken:"",zohoOrgId:"",slackChannel:"C0AQ7CMB01X"},
 company: {name:"ST1 Sports",ownerName:"Matt Stone",email:"matt@st1sports.com",phone:"719-256-0275",address:"Ames, Iowa",website:"st1sports.com"},
 brandAssets: [],
-savedAds: [],
-socialPosts: [],
 campaigns: [],
 contactLists: [],
 appUsers: [],
@@ -453,8 +451,6 @@ accounts:     mergeById(base.accounts,     server.accounts),
 invoices:     mergeById(base.invoices,     server.invoices),
 reorders:     mergeById(base.reorders,     server.reorders),
 brandAssets:  mergeById(base.brandAssets,  server.brandAssets),
-socialPosts:  mergeById(base.socialPosts,  server.socialPosts),
-savedAds:     mergeById(base.savedAds,     server.savedAds),
 templates:    mergeById(base.templates,    server.templates),
 reps:         mergeById(base.reps,         server.reps),
 orders:       mergeById(base.orders,       server.orders),
@@ -494,8 +490,6 @@ activity:     Array.isArray(p.activity)     ? p.activity     : [],
 integrations: {...SEED.integrations,...(p.integrations||{})},
 company:      {...SEED.company,...(p.company||{})},
 brandAssets:  Array.isArray(p.brandAssets)  ? p.brandAssets  : [],
-savedAds:     Array.isArray(p.savedAds)     ? p.savedAds     : [],
-socialPosts:  Array.isArray(p.socialPosts)  ? p.socialPosts  : [],
 campaigns:    Array.isArray(p.campaigns)    ? p.campaigns    : [],
 reps:         Array.isArray(p.reps)         ? p.reps         : [],
 invoiceLastSync: p.invoiceLastSync||null,
@@ -937,11 +931,6 @@ case "SAVE_INTEGRATIONS":   return {...prev, integrations:{...prev.integrations,
 case "SAVE_COMPANY":        return {...prev, company:{...prev.company,...payload}};
 case "ADD_BRAND_ASSET":     return {...prev, brandAssets:[...( prev.brandAssets||[]),payload]};
 case "DELETE_BRAND_ASSET":  return {...prev, brandAssets:(prev.brandAssets||[]).filter(a=>a.id!==payload)};
-case "ADD_SAVED_AD":        return {...prev, savedAds:[payload,...(prev.savedAds||[])]};
-case "DELETE_SAVED_AD":     return {...prev, savedAds:(prev.savedAds||[]).filter(a=>a.id!==payload)};
-case "ADD_SOCIAL_POST":     return {...prev, socialPosts:[...(prev.socialPosts||[]),payload]};
-case "UPDATE_SOCIAL_POST":  return {...prev, socialPosts:(prev.socialPosts||[]).map(p=>p.id===payload.id?{...p,...payload}:p)};
-case "DELETE_SOCIAL_POST":  return {...prev, socialPosts:(prev.socialPosts||[]).filter(p=>p.id!==payload)};
 case "ADD_CAMPAIGN":    return {...prev, campaigns:[payload,...(prev.campaigns||[])]};
 case "UPDATE_CAMPAIGN": return {...prev, campaigns:(prev.campaigns||[]).map(c=>c.id===payload.id?{...c,...payload}:c)};
 case "UPDATE_CAMPAIGN_TOUCH": {
@@ -954,7 +943,7 @@ return {...c,touches};
 })};
 }
 case "DELETE_CAMPAIGN": return {...prev, campaigns:(prev.campaigns||[]).filter(c=>c.id!==payload)};
-case "RESET":               return {...SEED, currentUserId:prev.currentUserId, integrations:prev.integrations, company:prev.company, brandAssets:prev.brandAssets||[], savedAds:prev.savedAds||[], appUsers:prev.appUsers||[], contactLists:prev.contactLists||[], campaigns:prev.campaigns||[], reps:prev.reps||[], ...(prev.priceLists!==undefined?{priceLists:prev.priceLists}:{})};
+case "RESET":               return {...SEED, currentUserId:prev.currentUserId, integrations:prev.integrations, company:prev.company, brandAssets:prev.brandAssets||[], appUsers:prev.appUsers||[], contactLists:prev.contactLists||[], campaigns:prev.campaigns||[], reps:prev.reps||[], ...(prev.priceLists!==undefined?{priceLists:prev.priceLists}:{})};
 default:                  return prev;
 }
 }
@@ -1373,10 +1362,9 @@ const NAV = useMemo(()=>[
 {id:"_s_growth"},
 {id:"prospecting", icon:"⊕", label:"Prospecting"},
 {id:"bulk-outreach", icon:"📤", label:"Bulk Outreach"},
-{id:"social",      icon:"📱", label:"Social"},
 {id:"reddit",      icon:"💬", label:"Reddit Engagement"},
-{id:"cc-ad-hub",   icon:"📊", label:"Ad Hub"},
 {id:"_s_tools"},
+{id:"cc-sales-copy", icon:"✦", label:"AI Tools"},
 {id:"reorder",     icon:"↺", label:"Reorder Engine", badge:(s.reorders||[]).filter(r=>r.status==="pending"&&(!r.snoozedUntil||new Date(r.snoozedUntil)<new Date())).length},
 {id:"team-stores", icon:"🛒", label:"Team Stores"},
 {id:"flagship-store", icon:"🏪", label:"Flagship Store"},
@@ -1642,7 +1630,6 @@ animation:syncing?"pulse 1s infinite":undefined}}/>
 {mod==="orders"      && <ModOrders/>}
 {mod==="reorder"     && <ModReorder/>}
 {mod==="prospecting" && <ModProspecting/>}
-{mod==="social"      && <ModSocial/>}
 {mod==="compete"     && <ModCompete/>}
 {mod==="activity"    && <ModActivity/>}
 {mod==="settings"    && <ModSettings/>}
@@ -9861,9 +9848,9 @@ ST1 Sports | matt@st1sports.com | 719-256-0275 | st1sports.com`},
 const CAMP_COLORS = ["#F37321","#1A5FA8","#1E8F4E","#6B3FA0","#C0392B","#C77800"];
 const CAMP_STATUS_COLORS = {draft:B.muted,active:B.green,paused:B.yellow,completed:B.blue};
 const CAMP_TEMPLATES = [
-{id:"tf_spring", name:"Track & Field Spring Push", product:"Track & Field Equipment", goal:"10 new quotes from ADs before spring season", channels:["email","social"], metrics:["Opens","Replies","Quotes Sent"], tone:"friendly", ctx:"Spring season purchasing window — ADs finalizing equipment budgets", assetTypes:["email3","social3"]},
+{id:"tf_spring", name:"Track & Field Spring Push", product:"Track & Field Equipment", goal:"10 new quotes from ADs before spring season", channels:["email"], metrics:["Opens","Replies","Quotes Sent"], tone:"friendly", ctx:"Spring season purchasing window — ADs finalizing equipment budgets", assetTypes:["email3"]},
 {id:"baseball_preseason", name:"Baseball Pre-Season Outreach", product:"Baseball / Softball", goal:"5 new deals before March 1", channels:["email","phone"], metrics:["Opens","Replies","Meetings Booked"], tone:"professional", ctx:"Pre-season equipment orders — coaches finalizing rosters and budgets", assetTypes:["email3","callscript"]},
-{id:"back_to_school", name:"Back to School Awareness", product:"Track & Field Equipment", goal:"Broad awareness + 15 new contacts in pipeline", channels:["email","social","paid_ads"], metrics:["Opens","Clicks","Impressions"], tone:"friendly", ctx:"Back to school — new year budgets just released", assetTypes:["email3","social6","adcopy"]},
+{id:"back_to_school", name:"Back to School Awareness", product:"Track & Field Equipment", goal:"Broad awareness + 15 new contacts in pipeline", channels:["email"], metrics:["Opens","Clicks","Replies"], tone:"friendly", ctx:"Back to school — new year budgets just released", assetTypes:["email3"]},
 {id:"reorder_nudge", name:"Reorder Nudge — Past Customers", product:"Other", goal:"Reactivate 5 past customers", channels:["email"], metrics:["Opens","Replies","Orders"], tone:"conversational", ctx:"Targeting schools that ordered last year — remind them to restock", assetTypes:["email3"]},
 {id:"blank", name:"Start Blank", product:"", goal:"", channels:[], metrics:[], tone:"friendly", ctx:"", assetTypes:[]},
 ];
@@ -9890,8 +9877,6 @@ setCampSubTab("execute");
 dispatch("SET_CAMPAIGN_NAV",null);
 },[s.campaignNavId]);
 const [genRunning,setGenRunning]=useState(false);
-const [genSocialRunning,setGenSocialRunning]=useState(false);
-const [genAdRunning,setGenAdRunning]=useState(false);
 const [genCallRunning,setGenCallRunning]=useState(false);
 const [genMailRunning,setGenMailRunning]=useState(false);
 const [editingTouchIdx,setEditingTouchIdx]=useState(null);
@@ -10013,8 +9998,6 @@ updates[bk]=new Date(startMs+bi*schedDelayRef.current*60000).toISOString();
 });
 if(Object.keys(updates).length) setBatchSchedules(prev=>({...prev,...updates}));
 },[selCampId,s.campaigns]);
-const [showAddPost,setShowAddPost]=useState(false);
-const [postDraft,setPostDraft]=useState({date:"",time:"09:00",platforms:[],caption:"",imageUrl:"",type:"post"});
 const [matchingContacts,setMatchingContacts]=useState(null);
 const campaigns = s.campaigns || [];
 // Falls back to contact data embedded directly in a campaign's own
@@ -10045,8 +10028,6 @@ campaignsRef.current = campaigns;
 const allSports = useMemo(()=>[...new Set((s.contacts||[]).map(c=>c.sport).filter(Boolean))].sort(),[s.contacts]);
 const CHANNELS = [
 {id:"email",icon:"✉",label:"Cold Email"},
-{id:"social",icon:"📱",label:"Social Media"},
-{id:"paid_ads",icon:"⬛",label:"Paid Ads"},
 {id:"sms",icon:"💬",label:"SMS"},
 {id:"phone",icon:"📞",label:"Phone"},
 {id:"newsletter",icon:"📧",label:"Newsletter"},
@@ -10187,42 +10168,6 @@ toast(`Email generation failed: ${e.message}`,"error");
 }
 setGenRunning(false);
 };
-const generateSocialDrafts = async () => {
-const ctx = campDraft || selCamp; if(!ctx) return;
-setGenSocialRunning(true);
-try {
-const result = await aiCall(
-`Create 3 social media post captions for ST1 Sports.\n${ST1}\n`+
-`Product: ${ctx.product}. Audience: ${ctx.audience}. Tone: ${ctx.tone||"friendly"}.\n`+
-`${ctx.ctx?`Context: ${ctx.ctx}.\n`:""}`+
-`Return JSON: {"posts":[{"caption":"","platforms":["instagram","facebook"],"type":"post"},{"caption":"","platforms":["linkedin"],"type":"post"},{"caption":"","platforms":["instagram"],"type":"story"}]}\n`+
-`Each caption under 150 chars. Include relevant hashtags. Vary the angle (awareness, social proof, urgency).`,
-{json:true,tokens:800}
-);
-const posts = (result?.posts||[]).map(p=>({...p,id:mkId(),date:"",imageUrl:"",imagePrompt:"",imageGenerating:false,scheduledDate:""}));
-if(!posts.length) { toast("AI returned no social posts — try again","error"); }
-else { saveCampAsset({socialDrafts:posts}); }
-} catch(e) {
-toast(`Social post generation failed: ${e.message}`,"error");
-}
-setGenSocialRunning(false);
-};
-const generateAdCopy = async () => {
-const ctx = campDraft || selCamp; if(!ctx) return;
-setGenAdRunning(true);
-try {
-const result = await aiCall(
-`Write paid ad copy for ST1 Sports.\n${ST1}\nProduct: ${ctx.product}. Audience: ${ctx.audience||"Athletic Directors and coaches"}. Tone: ${ctx.tone||"friendly"}.\n${ctx.ctx?`Context: ${ctx.ctx}.\n`:""}`+
-`Write 3 ad variations: headline (max 40 chars), primary text (max 125 chars), CTA. Format as plain text, each variation separated by "---".`,
-{tokens:600}
-);
-if(!result?.trim()) toast("AI returned no ad copy — try again","error");
-else saveCampAsset({adCopy:result});
-} catch(e) {
-toast(`Ad copy generation failed: ${e.message}`,"error");
-}
-setGenAdRunning(false);
-};
 const generateCallScript = async () => {
 const ctx = campDraft || selCamp; if(!ctx) return;
 setGenCallRunning(true);
@@ -10259,10 +10204,7 @@ const generateAllAssets = async () => {
 if(!campDraft) return;
 const types = campDraft.assetTypes||[];
 const emailTypes = types.filter(t=>t==="email3"||t==="email5");
-const socialTypes = types.filter(t=>t==="social3"||t==="social6");
 if(emailTypes.length>0) await generateTouches();
-if(socialTypes.length>0) await generateSocialDrafts();
-if(types.includes("adcopy")) await generateAdCopy();
 if(types.includes("callscript")) await generateCallScript();
 if(types.includes("directmail")) await generateDirectMail();
 };
@@ -10682,34 +10624,9 @@ dispatch("UPDATE_CAMPAIGN",{...selCamp,touches:(selCamp.touches||[]).map((t,i)=>
 setEditingTouchIdx(null);
 toast("Email updated","success");
 };
-const addCampPost = (campId) => {
-if(!postDraft.caption.trim()) return;
-const camp = campaigns.find(c=>c.id===campId);
-if(!camp) return;
-const post = {id:mkId(),...postDraft,campId,createdAt:today(),scheduledDate:postDraft.date||""};
-dispatch("UPDATE_CAMPAIGN",{...camp,socialPosts:[...(camp.socialPosts||[]),post]});
-setPostDraft({date:"",time:"09:00",platforms:[],caption:"",imageUrl:"",type:"post"});
-setShowAddPost(false);
-toast("Post added to campaign","success");
-};
-const postCampPostNow = async (campId, post) => {
-try{
-const r=await fetch("/api/social-post",{method:"POST",headers:{"Content-Type":"application/json"},
-body:JSON.stringify({post:post.caption,platforms:post.platforms,mediaUrls:post.imageUrl?[post.imageUrl]:[]})});
-const d=await r.json();
-if(d.status==="success"||d.postIds?.length){
-const camp=campaigns.find(c=>c.id===campId);
-if(camp) dispatch("UPDATE_CAMPAIGN",{...camp,socialPosts:(camp.socialPosts||[]).map(p=>p.id===post.id?{...p,posted:true,postedAt:today()}:p)});
-toast("Posted successfully","success");
-}else{toast(d.error||"Post failed","error");}
-}catch(e){toast(e?.message||"Post failed","error");}
-};
 const ASSET_TYPE_OPTIONS = [
 {id:"email3",label:"3-Touch Email Sequence"},
 {id:"email5",label:"5-Touch Email Sequence"},
-{id:"social3",label:"3 Social Posts"},
-{id:"social6",label:"6 Social Posts"},
-{id:"adcopy",label:"Ad Copy"},
 {id:"callscript",label:"Call Script"},
 {id:"directmail",label:"Direct Mail Letter"},
 ];
@@ -10736,7 +10653,7 @@ return (
 {campaigns.length===0?(
 <div className="card" style={{padding:40,textAlign:"center"}}>
 <div style={{fontFamily:"'Russo One',sans-serif",fontSize:18,color:B.black,marginBottom:8}}>No campaigns yet</div>
-<div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.muted,marginBottom:18}}>Create a campaign to coordinate emails, social posts, and ads in one place</div>
+<div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.muted,marginBottom:18}}>Create a campaign to coordinate emails and outreach in one place</div>
 <OBtn onClick={()=>startNewCampaign()}>+ CREATE FIRST CAMPAIGN</OBtn>
 </div>
 ):(
@@ -10770,7 +10687,6 @@ style={{padding:0,overflow:"hidden",cursor:"pointer",borderTop:`3px solid ${camp
 <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.blue,background:B.blueBg,padding:"2px 6px",borderRadius:3}}>✉ {(camp.touches||[]).length} touches</span>
 <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.orange,background:`${B.orange}14`,padding:"2px 6px",borderRadius:3}}>{active} enrolled</span>
 {replied>0&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.green,background:B.greenBg,padding:"2px 6px",borderRadius:3}}>{replied} replied</span>}
-{(camp.socialPosts||[]).length>0&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.purple,background:B.purpleBg,padding:"2px 6px",borderRadius:3}}>📱 {(camp.socialPosts||[]).length} posts</span>}
 </div>
 </div>
 <div style={{borderTop:`1px solid ${B.border}`,padding:"8px 16px",background:B.surface,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
@@ -10951,8 +10867,8 @@ style={{background:on?`${B.orange}12`:B.surface,color:on?B.orange:B.text,border:
 <div className="card" style={{padding:20}}>
 <div style={{fontFamily:"'Russo One',sans-serif",fontSize:14,color:B.black,letterSpacing:.2,marginBottom:16}}>3 — BUILD ASSETS</div>
 <div style={{display:"flex",gap:8,marginBottom:20,flexWrap:"wrap",alignItems:"center"}}>
-<OBtn onClick={generateAllAssets} disabled={genRunning||genSocialRunning||genAdRunning||genCallRunning||genMailRunning}>
-{(genRunning||genSocialRunning||genAdRunning||genCallRunning||genMailRunning)?"✦ GENERATING ALL...":"✦ GENERATE ALL"}
+<OBtn onClick={generateAllAssets} disabled={genRunning||genCallRunning||genMailRunning}>
+{(genRunning||genCallRunning||genMailRunning)?"✦ GENERATING ALL...":"✦ GENERATE ALL"}
 </OBtn>
 <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>Or generate each section individually below</div>
 </div>
@@ -10982,62 +10898,6 @@ style={{background:on?`${B.orange}12`:B.surface,color:on?B.orange:B.text,border:
 </div>
 </div>
 ))}
-</div>
-)}
-{/* Social posts */}
-{(campDraft.assetTypes||[]).some(t=>t==="social3"||t==="social6")&&(
-<div style={{marginBottom:20}}>
-<div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
-<div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.purple,letterSpacing:1}}>📱 SOCIAL POSTS</div>
-<OBtn sm onClick={generateSocialDrafts} disabled={genSocialRunning}>{genSocialRunning?"GENERATING...":"✦ GENERATE"}</OBtn>
-</div>
-{genSocialRunning&&<div style={{display:"flex",gap:7,alignItems:"center",fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.purple,marginBottom:10}}><Spin/>Writing social posts…</div>}
-{(campDraft.socialDrafts||[]).length>0&&campDraft.socialDrafts.map((p,i)=>(
-<div key={p.id||i} className="card" style={{padding:12,marginBottom:8,borderLeft:`3px solid ${B.purple}`}}>
-<div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.purple,letterSpacing:1,marginBottom:6}}>POST {i+1} — {(p.platforms||[]).join(", ").toUpperCase()}</div>
-<textarea value={p.caption||""} onChange={e=>setCampDraft(c=>({...c,socialDrafts:c.socialDrafts.map((x,j)=>j===i?{...x,caption:e.target.value}:x)}))} rows={3} style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"6px 9px",fontSize:12,fontFamily:"'Lexend',sans-serif",resize:"vertical",lineHeight:1.6}}/>
-<div style={{display:"flex",gap:6,marginTop:6,flexWrap:"wrap"}}>
-{["instagram","facebook","linkedin","twitter","tiktok"].map(pl=>{const sel=(p.platforms||[]).includes(pl);return<button key={pl} onClick={()=>setCampDraft(c=>({...c,socialDrafts:c.socialDrafts.map((x,j)=>j===i?{...x,platforms:sel?x.platforms.filter(v=>v!==pl):[...(x.platforms||[]),pl]}:x)}))} style={{background:sel?`${B.purple}14`:B.surface,color:sel?B.purple:B.muted,border:`1px solid ${sel?B.purple:B.border}`,borderRadius:3,padding:"3px 8px",fontSize:9,fontFamily:"'Lexend',sans-serif",cursor:"pointer"}}>{pl}</button>;})}
-</div>
-{/* Image */}
-<div style={{marginTop:10,paddingTop:10,borderTop:`1px solid ${B.border}`}}>
-<div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5,marginBottom:5}}>IMAGE</div>
-<div style={{display:"flex",gap:6,alignItems:"center",marginBottom:6}}>
-<input value={p.imagePrompt||`${campDraft.product||"sports equipment"} for ${(campDraft.icp?.sports||["sports"])[0]} — social post visual`} onChange={e=>setCampDraft(c=>({...c,socialDrafts:c.socialDrafts.map((x,j)=>j===i?{...x,imagePrompt:e.target.value}:x)}))} placeholder="AI image prompt..." style={{flex:1,background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"5px 8px",fontSize:11,fontFamily:"'Lexend',sans-serif"}}/>
-<button onClick={async()=>{
-const prompt=p.imagePrompt||`${campDraft.product||"sports equipment"} for ${(campDraft.icp?.sports||["sports"])[0]} — social post visual`;
-setCampDraft(c=>({...c,socialDrafts:c.socialDrafts.map((x,j)=>j===i?{...x,imageGenerating:true,imageError:""}:x)}));
-try{
-const r=await fetch("/api/adengine/generate-product-image",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({prompt,style:"REALISTIC",sizeKey:"square"})});
-const d=await r.json();
-if(!r.ok||!d.imageUrl){const errMsg=d.error||"Image generation failed";setCampDraft(c=>({...c,socialDrafts:c.socialDrafts.map((x,j)=>j===i?{...x,imageGenerating:false,imageError:errMsg}:x)}));toast(errMsg,"error");return;}
-setCampDraft(c=>({...c,socialDrafts:c.socialDrafts.map((x,j)=>j===i?{...x,imageUrl:d.imageUrl,imageGenerating:false,imageError:""}:x)}));
-}catch(err){const msg=err.message||"Image generation failed";setCampDraft(c=>({...c,socialDrafts:c.socialDrafts.map((x,j)=>j===i?{...x,imageGenerating:false,imageError:msg}:x)}));toast(msg,"error");}
-}} disabled={p.imageGenerating} style={{background:B.purple,color:B.white,border:"none",borderRadius:4,padding:"5px 12px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,fontWeight:700,cursor:"pointer",whiteSpace:"nowrap",flexShrink:0,opacity:p.imageGenerating?.7:1}}>
-{p.imageGenerating?"GENERATING...":"🎨 AI IMAGE"}
-</button>
-<label style={{background:B.surface,color:B.text,border:`1px solid ${B.border}`,borderRadius:4,padding:"5px 10px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,fontWeight:700,cursor:"pointer",whiteSpace:"nowrap",flexShrink:0}}>
-📎 UPLOAD
-<input type="file" accept="image/*" style={{display:"none"}} onChange={e=>{const f=e.target.files?.[0];if(!f)return;const r=new FileReader();r.onload=ev=>setCampDraft(c=>({...c,socialDrafts:c.socialDrafts.map((x,j)=>j===i?{...x,imageUrl:ev.target.result,imageError:""}:x)}));r.readAsDataURL(f);}}/>
-</label>
-</div>
-{p.imageGenerating&&<div style={{display:"flex",gap:6,alignItems:"center",fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.purple}}><Spin/>Generating image…</div>}
-{p.imageError&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.red,marginTop:4}}>{p.imageError}</div>}
-{p.imageUrl&&<div style={{marginTop:6,position:"relative",display:"inline-block"}}><img src={p.imageUrl} alt="Post visual" style={{maxWidth:200,borderRadius:5,border:`1px solid ${B.border}`,display:"block"}}/><button onClick={()=>setCampDraft(c=>({...c,socialDrafts:c.socialDrafts.map((x,j)=>j===i?{...x,imageUrl:""}:x)}))} style={{position:"absolute",top:4,right:4,background:"rgba(0,0,0,.6)",color:"#fff",border:"none",borderRadius:3,padding:"2px 6px",fontSize:9,cursor:"pointer"}}>✕</button></div>}
-</div>
-</div>
-))}
-</div>
-)}
-{/* Ad Copy */}
-{(campDraft.assetTypes||[]).includes("adcopy")&&(
-<div style={{marginBottom:20}}>
-<div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
-<div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.orange,letterSpacing:1}}>⬛ AD COPY</div>
-<OBtn sm onClick={generateAdCopy} disabled={genAdRunning}>{genAdRunning?"GENERATING...":"✦ GENERATE"}</OBtn>
-</div>
-{genAdRunning&&<div style={{display:"flex",gap:7,alignItems:"center",fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.orange,marginBottom:10}}><Spin/>Writing ad copy…</div>}
-<textarea value={campDraft.adCopy||""} onChange={e=>setCampDraft(c=>({...c,adCopy:e.target.value}))} rows={5} placeholder="Ad headline, primary text, and CTA variations…" style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 9px",fontSize:12,fontFamily:"'Lexend',sans-serif",resize:"vertical",lineHeight:1.6}}/>
 </div>
 )}
 {/* Call Script */}
@@ -11108,37 +10968,11 @@ return(
 </div>
 </div>
 )}
-{/* Social drafts schedule */}
-{(campDraft.socialDrafts||[]).length>0&&(
-<div style={{marginBottom:20}}>
-<div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.purple,letterSpacing:1,marginBottom:10}}>📱 SOCIAL POSTS</div>
-<div style={{display:"flex",flexDirection:"column",gap:6}}>
-{campDraft.socialDrafts.map((p,i)=>(
-<div key={p.id||i} style={{display:"flex",gap:10,alignItems:"center",padding:"8px 12px",background:B.surface,border:`1px solid ${B.border}`,borderRadius:5,borderLeft:`3px solid ${B.purple}`}}>
-<div style={{flex:1}}>
-<div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.purple,letterSpacing:1}}>POST {i+1} — {(p.platforms||[]).join(", ").toUpperCase()}</div>
-<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginTop:2}}>{(p.caption||"").slice(0,60)}{p.caption?.length>60?"...":""}</div>
-</div>
-<div style={{display:"flex",gap:6,alignItems:"center",flexShrink:0}}>
-<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5}}>POST DATE</span>
-<input type="date" value={p.scheduledDate||""} onChange={e=>setCampDraft(c=>({...c,socialDrafts:c.socialDrafts.map((x,j)=>j===i?{...x,scheduledDate:e.target.value}:x)}))} style={{background:B.white,border:`1px solid ${B.border}`,color:B.text,borderRadius:3,padding:"4px 7px",fontSize:11}}/>
-</div>
-</div>
-))}
-</div>
-</div>
-)}
 {/* Other assets schedule */}
-{((campDraft.adCopy||"").trim()||(campDraft.callScript||"").trim()||(campDraft.directMail||"").trim())&&(
+{(((campDraft.callScript||"").trim())||(campDraft.directMail||"").trim())&&(
 <div style={{marginBottom:20}}>
 <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.muted,letterSpacing:1,marginBottom:10}}>OTHER ASSETS — PLANNED DATE</div>
 <div style={{display:"flex",flexDirection:"column",gap:6}}>
-{(campDraft.adCopy||"").trim()&&(
-<div style={{display:"flex",gap:10,alignItems:"center",padding:"8px 12px",background:B.surface,border:`1px solid ${B.border}`,borderRadius:5}}>
-<div style={{flex:1,fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text}}>⬛ Ad Copy</div>
-<input type="date" value={campDraft.adCopyDate||""} onChange={e=>setCampDraft(c=>({...c,adCopyDate:e.target.value}))} style={{background:B.white,border:`1px solid ${B.border}`,color:B.text,borderRadius:3,padding:"4px 7px",fontSize:11}}/>
-</div>
-)}
 {(campDraft.callScript||"").trim()&&(
 <div style={{display:"flex",gap:10,alignItems:"center",padding:"8px 12px",background:B.surface,border:`1px solid ${B.border}`,borderRadius:5}}>
 <div style={{flex:1,fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text}}>📞 Call Script</div>
@@ -12447,8 +12281,6 @@ toast(`${c.fullName||c.firstName} unsubscribed`,"info");
 </div>
 <div style={{display:"flex",gap:8,flexWrap:"wrap",marginBottom:8}}>
 <OBtn sm onClick={()=>generateTouches(emailGenDirection||undefined)} disabled={genRunning}>{genRunning?"GENERATING...":"✦ GENERATE / REGEN EMAILS"}</OBtn>
-<button onClick={generateSocialDrafts} disabled={genSocialRunning} style={{background:genSocialRunning?B.muted:B.purple,color:B.white,border:"none",borderRadius:4,padding:"5px 12px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,cursor:"pointer",opacity:genSocialRunning?.7:1}}>{genSocialRunning?"GENERATING...":"✦ SOCIAL POSTS"}</button>
-<button onClick={generateAdCopy} disabled={genAdRunning} style={{background:genAdRunning?B.muted:B.orange,color:B.white,border:"none",borderRadius:4,padding:"5px 12px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,cursor:"pointer",opacity:genAdRunning?.7:1}}>{genAdRunning?"GENERATING...":"✦ AD COPY"}</button>
 <button onClick={generateCallScript} disabled={genCallRunning} style={{background:genCallRunning?B.muted:B.blue,color:B.white,border:"none",borderRadius:4,padding:"5px 12px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,cursor:"pointer",opacity:genCallRunning?.7:1}}>{genCallRunning?"GENERATING...":"✦ CALL SCRIPT"}</button>
 <button onClick={generateDirectMail} disabled={genMailRunning} style={{background:genMailRunning?B.muted:B.teal,color:B.white,border:"none",borderRadius:4,padding:"5px 12px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,cursor:"pointer",opacity:genMailRunning?.7:1}}>{genMailRunning?"GENERATING...":"✦ DIRECT MAIL"}</button>
 </div>
@@ -12490,27 +12322,6 @@ rows={5} style={{width:"100%",background:B.surface,border:`1px solid ${B.border}
 </div>
 </div>
 )}
-{/* Social drafts (campaign-level) */}
-{(selCamp.socialDrafts||[]).length>0&&(
-<div style={{marginBottom:20}}>
-<div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.purple,letterSpacing:1,marginBottom:10}}>📱 SOCIAL DRAFT POSTS</div>
-<div style={{display:"flex",flexDirection:"column",gap:8}}>
-{(selCamp.socialDrafts||[]).map((p,i)=>(
-<div key={p.id||i} className="card" style={{padding:"10px 12px",borderLeft:`3px solid ${B.purple}`}}>
-<div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.purple,marginBottom:5}}>POST {i+1} — {(p.platforms||[]).join(", ").toUpperCase()}</div>
-<textarea value={p.caption||""} onChange={e=>{const updated=(selCamp.socialDrafts||[]).map((x,j)=>j===i?{...x,caption:e.target.value}:x);dispatch("UPDATE_CAMPAIGN",{...selCamp,socialDrafts:updated});}} rows={3} style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"6px 9px",fontSize:12,fontFamily:"'Lexend',sans-serif",resize:"vertical",lineHeight:1.6}}/>
-</div>
-))}
-</div>
-</div>
-)}
-{/* Ad Copy */}
-{selCamp.adCopy&&(
-<div style={{marginBottom:20}}>
-<div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.orange,letterSpacing:1,marginBottom:6}}>⬛ AD COPY</div>
-<textarea value={selCamp.adCopy||""} onChange={e=>dispatch("UPDATE_CAMPAIGN",{...selCamp,adCopy:e.target.value})} rows={5} style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 9px",fontSize:12,fontFamily:"'Lexend',sans-serif",resize:"vertical",lineHeight:1.6}}/>
-</div>
-)}
 {/* Call Script */}
 {selCamp.callScript&&(
 <div style={{marginBottom:20}}>
@@ -12525,94 +12336,6 @@ rows={5} style={{width:"100%",background:B.surface,border:`1px solid ${B.border}
 <textarea value={selCamp.directMail||""} onChange={e=>dispatch("UPDATE_CAMPAIGN",{...selCamp,directMail:e.target.value})} rows={6} style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 9px",fontSize:12,fontFamily:"'Lexend',sans-serif",resize:"vertical",lineHeight:1.6}}/>
 </div>
 )}
-{/* Social posts (scheduled) */}
-<div style={{marginBottom:20}}>
-<div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
-<div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.purple,letterSpacing:1}}>📱 SOCIAL POSTS — {(selCamp.socialPosts||[]).length}</div>
-<OBtn sm onClick={()=>setShowAddPost(!showAddPost)}>+ ADD POST</OBtn>
-</div>
-{showAddPost&&(
-<div className="card" style={{padding:14,marginBottom:14}}>
-<div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:10}}>
-<div><Lbl s={{marginBottom:4}}>Date</Lbl><input type="date" value={postDraft.date} onChange={e=>setPostDraft(d=>({...d,date:e.target.value}))} style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 9px",fontSize:12}}/></div>
-<div><Lbl s={{marginBottom:4}}>Type</Lbl><select value={postDraft.type} onChange={e=>setPostDraft(d=>({...d,type:e.target.value}))} style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 9px",fontSize:12}}>{["post","story","reel"].map(o=><option key={o}>{o}</option>)}</select></div>
-</div>
-<div style={{marginBottom:10}}><Lbl s={{marginBottom:4}}>Platforms</Lbl>
-<div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
-{["facebook","instagram","linkedin","twitter","tiktok"].map(p=>{const sel=(postDraft.platforms||[]).includes(p);return<button key={p} onClick={()=>setPostDraft(d=>({...d,platforms:sel?d.platforms.filter(x=>x!==p):[...d.platforms,p]}))} style={{background:sel?`${B.orange}14`:B.white,color:sel?B.orange:B.muted,border:`1px solid ${sel?B.orange:B.border}`,borderRadius:3,padding:"4px 10px",fontSize:10,fontFamily:"'Lexend',sans-serif",cursor:"pointer"}}>{p}</button>;})}
-</div>
-</div>
-<div style={{marginBottom:10}}><Lbl s={{marginBottom:4}}>Caption</Lbl><textarea value={postDraft.caption} onChange={e=>setPostDraft(d=>({...d,caption:e.target.value}))} rows={3} style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 9px",fontSize:12,fontFamily:"'Lexend',sans-serif",resize:"vertical"}}/></div>
-<div style={{marginBottom:10}}>
-<Lbl s={{marginBottom:4}}>Image (optional)</Lbl>
-<div style={{display:"flex",gap:6,alignItems:"center"}}>
-<input value={typeof postDraft.imageUrl==="string"&&!postDraft.imageUrl.startsWith("data:")?postDraft.imageUrl:""} onChange={e=>setPostDraft(d=>({...d,imageUrl:e.target.value}))} placeholder="https://... or upload →" style={{flex:1,background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 9px",fontSize:12,fontFamily:"'Lexend',sans-serif"}}/>
-<label style={{background:B.surface,color:B.text,border:`1px solid ${B.border}`,borderRadius:4,padding:"7px 12px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,fontWeight:700,cursor:"pointer",whiteSpace:"nowrap",flexShrink:0}}>
-📎 UPLOAD
-<input type="file" accept="image/*" style={{display:"none"}} onChange={e=>{const f=e.target.files?.[0];if(!f)return;const r=new FileReader();r.onload=ev=>setPostDraft(d=>({...d,imageUrl:ev.target.result}));r.readAsDataURL(f);}}/>
-</label>
-</div>
-{postDraft.imageUrl&&<div style={{marginTop:6,position:"relative",display:"inline-block"}}><img src={postDraft.imageUrl} alt="" style={{maxHeight:80,borderRadius:4,border:`1px solid ${B.border}`}}/><button onClick={()=>setPostDraft(d=>({...d,imageUrl:""}))} style={{position:"absolute",top:2,right:2,background:"rgba(0,0,0,.6)",color:"#fff",border:"none",borderRadius:3,padding:"1px 5px",fontSize:9,cursor:"pointer"}}>✕</button></div>}
-</div>
-<div style={{marginBottom:12,display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
-<div><Lbl s={{marginBottom:4}}>Schedule Date</Lbl><input type="date" value={postDraft.date} min={new Date().toISOString().slice(0,10)} onChange={e=>setPostDraft(d=>({...d,date:e.target.value}))} style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 9px",fontSize:12}}/></div>
-<div><Lbl s={{marginBottom:4}}>Time</Lbl><input type="time" value={postDraft.time||"09:00"} onChange={e=>setPostDraft(d=>({...d,time:e.target.value}))} style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 9px",fontSize:12}}/></div>
-</div>
-<div style={{display:"flex",gap:8}}><OBtn sm onClick={()=>addCampPost(selCamp.id)}>✓ ADD TO CAMPAIGN</OBtn><GBtn onClick={()=>setShowAddPost(false)}>CANCEL</GBtn></div>
-</div>
-)}
-{(selCamp.socialPosts||[]).length===0&&!showAddPost&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,padding:"10px 0"}}>No social posts yet</div>}
-<div style={{display:"flex",flexDirection:"column",gap:8}}>
-{(selCamp.socialPosts||[]).sort((a,b)=>(a.date||"").localeCompare(b.date||"")).map(post=>(
-<div key={post.id} className="card" style={{padding:"12px 14px",borderLeft:`3px solid ${post.posted?B.green:B.purple}`}}>
-<div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
-<div style={{flex:1}}>
-<div style={{display:"flex",gap:6,alignItems:"center",marginBottom:5,flexWrap:"wrap"}}>
-{post.date&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5}}>{post.date}</span>}
-{(post.platforms||[]).map(p=><span key={p} style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.blue,background:B.blueBg,padding:"2px 5px",borderRadius:3}}>{p}</span>)}
-{post.posted&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.green,background:B.greenBg,padding:"2px 5px",borderRadius:3}}>✓ POSTED</span>}
-</div>
-<div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,lineHeight:1.5}}>{post.caption}</div>
-{post.imageUrl&&<img src={post.imageUrl} alt="" style={{maxWidth:200,borderRadius:4,marginTop:6}}/>}
-</div>
-{!post.posted&&(
-<div style={{display:"flex",flexDirection:"column",gap:4,marginLeft:12,flexShrink:0}}>
-{(!post.scheduledDate||post.scheduledDate<=today())&&<OBtn sm onClick={()=>postCampPostNow(selCamp.id,post)}>POST NOW</OBtn>}
-{post.scheduledDate&&post.scheduledDate>today()&&<div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.muted,padding:"2px 4px",textAlign:"center"}}>SCHEDULED {post.scheduledDate}</div>}
-<button onClick={()=>dispatch("UPDATE_CAMPAIGN",{...selCamp,socialPosts:(selCamp.socialPosts||[]).filter(p=>p.id!==post.id)})} style={{background:"none",border:`1px solid ${B.border}`,borderRadius:4,padding:"3px 8px",fontSize:9,fontFamily:"'Lexend',sans-serif",color:B.muted,cursor:"pointer"}}>REMOVE</button>
-</div>
-)}
-</div>
-</div>
-))}
-</div>
-</div>
-{/* Linked Ads */}
-<div style={{marginBottom:20}}>
-<div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.muted,letterSpacing:1,marginBottom:10}}>⬛ LINKED ADS</div>
-{(()=>{
-const linkedAds=(s.ads||[]).filter(a=>(selCamp.adIds||[]).includes(a.id));
-const unlinkable=(s.ads||[]).filter(a=>!(selCamp.adIds||[]).includes(a.id));
-return(<div>
-{linkedAds.length===0&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,marginBottom:8}}>No ads linked — create in Ad Engine tab, then link here.</div>}
-{linkedAds.map(ad=>(
-<div key={ad.id} className="card" style={{padding:"10px 12px",marginBottom:8,borderLeft:`3px solid ${B.orange}`,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-<div><div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,fontWeight:500}}>{ad.name||ad.headline||"Ad"}</div><div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{ad.objective}</div></div>
-<button onClick={()=>dispatch("UPDATE_CAMPAIGN",{...selCamp,adIds:(selCamp.adIds||[]).filter(id=>id!==ad.id)})} style={{background:"none",border:`1px solid ${B.border}`,borderRadius:4,padding:"3px 8px",fontSize:9,fontFamily:"'Lexend',sans-serif",color:B.muted,cursor:"pointer"}}>UNLINK</button>
-</div>
-))}
-{unlinkable.length>0&&(<div style={{marginTop:8}}>
-<Lbl s={{marginBottom:6}}>LINK AN AD</Lbl>
-{unlinkable.slice(0,8).map(ad=>(
-<div key={ad.id} className="card fu" style={{padding:"8px 12px",marginBottom:6,display:"flex",justifyContent:"space-between",alignItems:"center",cursor:"pointer"}} onClick={()=>dispatch("UPDATE_CAMPAIGN",{...selCamp,adIds:[...(selCamp.adIds||[]),ad.id]})}>
-<div><div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text}}>{ad.name||ad.headline||"Ad"}</div><div style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted}}>{ad.objective}</div></div>
-<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.orange}}>+ LINK</span>
-</div>
-))}
-</div>)}
-</div>);
-})()}
-</div>
 </div>
 )}
 {/* REPORT TAB */}
@@ -13012,545 +12735,6 @@ return(
 )}
 {(status.queue||[]).length===0&&(
 <div className="card" style={{padding:22,textAlign:"center",color:B.muted,fontFamily:"'Lexend',sans-serif",fontSize:12}}>No batches currently queued.</div>
-)}
-</div>
-);
-}
-// Must match api/social-post.js's platformMap keys — those are the only
-// platforms Publer can actually receive a post for.
-const SOCIAL_PLATFORMS = ["facebook","instagram","linkedin","twitter","tiktok"];
-const PLATFORM_COLORS = { facebook:"#1877F2", instagram:"#E4405F", linkedin:"#0A66C2", twitter:"#1DA1F2", tiktok:"#000000" };
-const PLATFORM_LIMITS = { facebook:63206, instagram:2200, linkedin:3000, twitter:280, tiktok:2200 };
-function ModSocial() {
-const {s,dispatch,toast}=useApp();
-const [tab,setTab]=useState("posts");
-const [caption,setCaption]=useState("");
-const [platforms,setPlatforms]=useState([]);
-const [postType,setPostType]=useState("post");
-const [imageUrl,setImageUrl]=useState("");
-const [scheduleAt,setScheduleAt]=useState("");
-const [scheduleTime,setScheduleTime]=useState("09:00");
-const [linkUrl,setLinkUrl]=useState("");
-const [linkedCampId,setLinkedCampId]=useState("");
-const [posting,setPosting]=useState(false);
-const [genRunning,setGenRunning]=useState(false);
-const [editingPostId,setEditingPostId]=useState(null);
-const [editDraft,setEditDraft]=useState({});
-const [verboseDebugId,setVerboseDebugId]=useState(null);
-const [verboseResult,setVerboseResult]=useState(null);
-const [postLength,setPostLength]=useState("medium");
-const [tone,setTone]=useState("Professional");
-const [topic,setTopic]=useState("");
-const [product,setProduct]=useState("");
-const [platformVariants,setPlatformVariants]=useState(null);
-const [imgUseCase,setImgUseCase]=useState("Social Post");
-const [imgMood,setImgMood]=useState("Clean");
-const [imgColors,setImgColors]=useState("");
-const [imgGenerating,setImgGenerating]=useState(false);
-const [imgPrompt,setImgPrompt]=useState("");
-const [imgError,setImgError]=useState(null);
-const [showImgGen,setShowImgGen]=useState(false);
-const [filterStatus,setFilterStatus]=useState("all");
-const [filterPlatform,setFilterPlatform]=useState("all");
-const [editingPost,setEditingPost]=useState(null);
-const [syncingStats,setSyncingStats]=useState(false);
-const campaigns=s.campaigns||[];
-const standalonePosts=(s.socialPosts||[]).map(p=>({...p,_source:"standalone"}));
-const campaignDraftPosts=campaigns.flatMap(c=>
-(c.socialDrafts||[])
-.filter(p=>(p.scheduledDate||p.date))
-.map(p=>({...p,date:p.scheduledDate||p.date,status:"scheduled",_source:"campaign_draft",_campaignId:c.id,_campaignName:c.name}))
-);
-const campaignPosts=campaigns.flatMap(c=>
-(c.socialPosts||[]).map(p=>({...p,_source:"campaign",_campaignId:c.id,_campaignName:c.name}))
-);
-const allPosts=[...standalonePosts,...campaignPosts,...campaignDraftPosts]
-.sort((a,b)=>(b.createdAt||b.date||"").localeCompare(a.createdAt||a.date||""));
-const TONE_GUIDE={Hype:"Energetic, exciting, exclamation points, pump-up energy.",Professional:"Professional but engaging, credible, clear value.",Educational:"Informative, adds value, teaches something useful."};
-const generateCaption=async()=>{
-setGenRunning(true);
-const hardLimit=platforms.length?Math.min(...platforms.map(p=>PLATFORM_LIMITS[p]||3000)):3000;
-const lengthTargets={short:{words:30,chars:200},medium:{words:80,chars:500},long:{words:180,chars:1200}};
-const target=lengthTargets[postLength];
-const effectiveChars=Math.min(target.chars,hardLimit);
-const platformNote=hardLimit<500?` IMPORTANT: ${platforms.find(p=>PLATFORM_LIMITS[p]===hardLimit)} has a ${hardLimit}-character limit — stay well under it.`:"";
-const lengthGuide=`around ${target.words} words / ${effectiveChars} characters max${platformNote}`;
-const direction=caption.trim();
-const topicCtx=topic.trim()?`Topic: ${topic.trim()}.`:"";
-const productCtx=product.trim()?`Product: ${product.trim()}.`:"";
-const strict=`\n\nRETURN ONLY THE FINISHED POST TEXT. No explanations, no bullet points, no character counts. Just the post.`;
-const prompt=direction
-?`Rewrite and improve this social media post for ST1 Sports (athletic equipment company). ${ST1}\n${topicCtx} ${productCtx}\nKeep the same core message.\nPlatforms: ${platforms.join(", ")||"general social"}.\nTone: ${tone} — ${TONE_GUIDE[tone]}\nLength: ${lengthGuide}.${strict}\n\nDraft to improve:\n${direction}`
-:`Write a social media post for ST1 Sports (athletic equipment company). ${ST1}\n${topicCtx} ${productCtx}\nPlatforms: ${platforms.join(", ")||"general social"}.\nTone: ${tone} — ${TONE_GUIDE[tone]}\nLength: ${lengthGuide}.${strict}`;
-const r=await aiCall(prompt,{tokens:postLength==="long"?500:postLength==="medium"?300:150});
-if(r) setCaption(r);
-setGenRunning(false);
-};
-const generatePerPlatform=async()=>{
-if(!platforms.length) return;
-setGenRunning(true); setPlatformVariants(null);
-const topicCtx=topic.trim()||caption.trim()||"ST1 Sports athletic equipment";
-const productCtx=product.trim()?`Product: ${product.trim()}.`:"";
-const task=`Write optimized social media posts for ${platforms.join(", ")} about: ${topicCtx}. ${productCtx} ST1 Sports athletic equipment brand. Tone: ${tone} — ${TONE_GUIDE[tone]} Include platform-appropriate hashtags (5–10 per platform). Return JSON only: {${platforms.map(p=>`"${p.toLowerCase()}":{"caption":"...","hashtags":["#..."]}`).join(",")}}`;
-const r=await aiCall(task,{tokens:900});
-if(r){
-try{const m=r.match(/\{[\s\S]*\}/);if(m)setPlatformVariants(JSON.parse(m[0]));}catch{}
-}
-setGenRunning(false);
-};
-const generateAiImage=async()=>{
-setImgGenerating(true); setImgError(null); setImgPrompt("");
-const MOOD_STYLE={Bold:"DESIGN",Clean:"REALISTIC",Energetic:"REALISTIC"};
-const CASE_SIZE={"Social Post":"square","Product Promo":"square","Email Banner":"landscape","Event Flyer":"story"};
-try{
-const featured=product.trim()||topic.trim()||"ST1 Sports athletic equipment";
-const builtPrompt=await aiCall(`Create an image generation prompt for a "${imgUseCase}" for ST1 Sports athletic equipment brand. Featured: ${featured}. Visual mood: ${imgMood}. Brand colors: orange (#F37321) and black.${imgColors.trim()?` Additional colors: ${imgColors.trim()}.`:""} Athletic sports marketing. Professional commercial quality. Return ONLY the image prompt — no preamble.`,{tokens:200});
-if(!builtPrompt) throw new Error("AI prompt generation failed");
-setImgPrompt(builtPrompt);
-const imgRes=await fetch("/api/adengine/generate-product-image",{method:"POST",headers:{"Content-Type":"application/json"},
-body:JSON.stringify({prompt:builtPrompt,style:MOOD_STYLE[imgMood]||"REALISTIC",sizeKey:CASE_SIZE[imgUseCase]||"square"})});
-const imgData=await imgRes.json();
-if(!imgRes.ok) throw new Error(imgData.error||`Image API error ${imgRes.status}`);
-setImageUrl(imgData.imageUrl);
-}catch(e){setImgError(e.message);}
-setImgGenerating(false);
-};
-const checkPublerJob=async(postId,jobId,isScheduled)=>{
-for(let i=0;i<8;i++){
-await new Promise(r=>setTimeout(r,i===0?3000:4000));
-try{
-const r=await fetch("/api/social-post",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"job-status",jobId})});
-const d=await r.json();
-if(d.done){
-if(d.failures?.length){
-const msg=d.failures.join(" | ");
-dispatch("UPDATE_SOCIAL_POST",{id:postId,status:"local_only",publerError:msg});
-toast(`Publer failed: ${msg}`,"error");
-}else{
-dispatch("UPDATE_SOCIAL_POST",{id:postId,status:"scheduled",publerError:null});
-toast(isScheduled?"Scheduled in Publer — check your calendar!":"Queued in Publer — posts in ~2 min, check your calendar!","success");
-}
-return;
-}
-}catch{}
-}
-dispatch("UPDATE_SOCIAL_POST",{id:postId,status:isScheduled?"scheduled":"published",publerError:null});
-toast("Sent to Publer (confirm in your Publer calendar)","success");
-};
-const submitPost=async()=>{
-if(!platforms.length){toast("Select at least one platform","error");return;}
-if(!caption.trim()){toast("Caption is required","error");return;}
-if(scheduleAt){
-const tzOff=new Date().getTimezoneOffset();
-const tzSign=tzOff<=0?"+":"-";
-const tzH=String(Math.floor(Math.abs(tzOff)/60)).padStart(2,"0");
-const tzM=String(Math.abs(tzOff)%60).padStart(2,"0");
-const chosen=new Date(`${scheduleAt}T${scheduleTime}:00${tzSign}${tzH}:${tzM}`);
-if(chosen<=new Date()){
-const n=new Date(Date.now()+5*60*1000);
-toast(`${scheduleTime} is in the past — pick a time after ${String(n.getHours()).padStart(2,"0")}:${String(n.getMinutes()).padStart(2,"0")}  (your local time)`,"error");
-return;
-}
-}
-setPosting(true);
-const tzOff=new Date().getTimezoneOffset();
-const tzSign=tzOff<=0?"+":"-";
-const tzH=String(Math.floor(Math.abs(tzOff)/60)).padStart(2,"0");
-const tzM=String(Math.abs(tzOff)%60).padStart(2,"0");
-const scheduleDateTime=scheduleAt?`${scheduleAt}T${scheduleTime}:00${tzSign}${tzH}:${tzM}`:null;
-const post={id:mkId(),createdAt:today(),date:scheduleAt||today(),time:scheduleTime,platforms,caption,imageUrl:imageUrl||"",link:linkUrl||"",status:"local_only",postType,campaignId:linkedCampId||""};
-dispatch("ADD_SOCIAL_POST",post);
-if(linkedCampId){
-const camp=campaigns.find(c=>c.id===linkedCampId);
-if(camp) dispatch("UPDATE_CAMPAIGN",{...camp,socialPosts:[...(camp.socialPosts||[]),post]});
-}
-try{
-const r=await fetch("/api/social-post",{method:"POST",headers:{"Content-Type":"application/json"},
-body:JSON.stringify({post:caption,platforms,mediaUrls:imageUrl?[imageUrl]:undefined,scheduleDate:scheduleDateTime||undefined,isStory:postType==="story",link:linkUrl||undefined})});
-const data=await r.json();
-const isSuccess=(data.status==="success"||data.status==="scheduled")&&!data.error;
-if(isSuccess){
-const jobId=data.postIds?.[0];
-dispatch("UPDATE_SOCIAL_POST",{id:post.id,status:"local_only",publerPostIds:data.postIds||[],publerError:null});
-if(linkedCampId){const camp=campaigns.find(c=>c.id===linkedCampId);if(camp)dispatch("UPDATE_CAMPAIGN",{...camp,socialPosts:[...(camp.socialPosts||[]).filter(p=>p.id!==post.id),{...post,status:"local_only"}]});}
-if(data._missing) toast(`⚠ ${data._missing}`,"warn");
-toast("Sent to Publer — checking result…","info");
-if(jobId) checkPublerJob(post.id,jobId,!!scheduleAt);
-else{dispatch("UPDATE_SOCIAL_POST",{id:post.id,status:scheduleAt?"scheduled":"published"});toast(scheduleAt?"Scheduled!":"Published!","success");}
-}else{
-const errMsg=data.error||"Publer rejected the post";
-dispatch("UPDATE_SOCIAL_POST",{id:post.id,status:"local_only",publerError:errMsg});
-toast(`Saved locally — Publer failed: ${errMsg.slice(0,120)}`,"warn");
-}
-}catch(err){
-dispatch("UPDATE_SOCIAL_POST",{id:post.id,status:"local_only",publerError:err.message});
-toast(`Saved locally — Publer unreachable: ${err.message.slice(0,60)}`,"warn");
-}
-setCaption("");setPlatforms([]);setImageUrl("");setScheduleAt("");setLinkUrl("");setLinkedCampId("");
-setTab("posts");
-setPosting(false);
-};
-const filtered=allPosts.filter(p=>{
-if(filterStatus!=="all"&&p.status!==filterStatus) return false;
-if(filterPlatform!=="all"&&!(p.platforms||[]).includes(filterPlatform)) return false;
-return true;
-});
-const scheduledCount=allPosts.filter(p=>p.status==="scheduled").length;
-return(
-<div style={{padding:"22px 26px"}}>
-<PH title="SOCIAL MEDIA" sub="Schedule, publish, and track posts across all platforms"/>
-<div style={{display:"flex",gap:5,marginBottom:18,flexWrap:"wrap",alignItems:"center",justifyContent:"space-between"}}>
-<div style={{display:"flex",gap:5}}>
-{[["posts","📋 ALL POSTS"],["new","✦ NEW POST"]].map(([id,l])=>(
-<button key={id} onClick={()=>setTab(id)} style={{background:tab===id?B.orange:B.white,color:tab===id?B.white:B.muted,border:`1px solid ${tab===id?B.orange:B.border}`,borderRadius:4,padding:"6px 14px",fontSize:10,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,letterSpacing:.4,cursor:"pointer"}}>{l}</button>
-))}
-</div>
-<div style={{display:"flex",gap:8,alignItems:"center"}}>
-{scheduledCount>0&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.blue,background:B.blueBg,padding:"3px 9px",borderRadius:3}}>{scheduledCount} SCHEDULED</span>}
-<OBtn sm onClick={()=>setTab("new")}>+ NEW POST</OBtn>
-</div>
-</div>
-{/* ── ALL POSTS ─────────────────────────────────────────────────────── */}
-{tab==="posts"&&(
-<div>
-<div style={{display:"flex",gap:8,marginBottom:14,flexWrap:"wrap",alignItems:"center"}}>
-<div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.muted,letterSpacing:1}}>{allPosts.length} TOTAL</div>
-<div style={{display:"flex",gap:4,marginLeft:"auto"}}>
-{["all","scheduled","published","draft"].map(st=>(
-<button key={st} onClick={()=>setFilterStatus(st)} style={{background:filterStatus===st?B.orange:B.white,color:filterStatus===st?B.white:B.muted,border:`1px solid ${filterStatus===st?B.orange:B.border}`,borderRadius:3,padding:"4px 9px",fontSize:9,fontFamily:"'Lexend',sans-serif",cursor:"pointer"}}>{st.toUpperCase()}</button>
-))}
-</div>
-<select value={filterPlatform} onChange={e=>setFilterPlatform(e.target.value)} style={{background:B.surface,border:`1px solid ${B.border}`,borderRadius:3,padding:"5px 8px",fontSize:11,color:B.text}}>
-<option value="all">All platforms</option>
-{SOCIAL_PLATFORMS.map(p=><option key={p} value={p}>{p}</option>)}
-</select>
-</div>
-{filtered.length===0?(
-<div className="card" style={{padding:40,textAlign:"center"}}>
-<div style={{fontFamily:"'Russo One',sans-serif",fontSize:16,color:B.black,marginBottom:8}}>No posts yet</div>
-<div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.muted,marginBottom:16}}>Create standalone posts here or schedule posts inside a campaign</div>
-<OBtn onClick={()=>setTab("new")}>+ CREATE FIRST POST</OBtn>
-</div>
-):(
-<div style={{display:"flex",flexDirection:"column",gap:8}}>
-{filtered.map(p=>{
-const isLocalOnly=p.status==="local_only";
-const sc={scheduled:B.blue,published:B.green,draft:B.muted,local_only:B.red}[p.status]||B.muted;
-const retryPost=async()=>{
-if(!(p.caption||"").trim()){toast("No caption to send","error");return;}
-try{
-const tzOff=new Date().getTimezoneOffset();
-const tzSign=tzOff<=0?"+":"-";
-const tzH=String(Math.floor(Math.abs(tzOff)/60)).padStart(2,"0");
-const tzM=String(Math.abs(tzOff)%60).padStart(2,"0");
-const retryTime=new Date(Date.now()+5*60*1000);
-const pad=n=>String(n).padStart(2,"0");
-const retryIso=`${retryTime.getFullYear()}-${pad(retryTime.getMonth()+1)}-${pad(retryTime.getDate())}T${pad(retryTime.getHours())}:${pad(retryTime.getMinutes())}:00${tzSign}${tzH}:${tzM}`;
-const r=await fetch("/api/social-post",{method:"POST",headers:{"Content-Type":"application/json"},
-body:JSON.stringify({post:p.caption,platforms:p.platforms,mediaUrls:p.imageUrl?[p.imageUrl]:undefined,link:p.link||undefined,scheduleDate:retryIso})});
-const data=await r.json();
-const ok=(data.status==="success"||data.status==="scheduled")&&!data.error;
-if(ok){
-const jobId=data.postIds?.[0];
-const isFakeId=jobId?.startsWith("publer-submitted-");
-dispatch("UPDATE_SOCIAL_POST",{id:p.id,status:"scheduled",publerError:null,publerPostIds:data.postIds||[]});
-if(isFakeId||!jobId){
-toast("Sent to Publer — check your calendar to confirm","success");
-}else{
-toast("Sent to Publer — checking result…","info");
-checkPublerJob(p.id,jobId,false);
-}
-}else{
-const detail=data.detail?JSON.stringify(data.detail).slice(0,200):"";
-const msg=(data.error||"Publer rejected post")+(detail?` — ${detail}`:"");
-dispatch("UPDATE_SOCIAL_POST",{id:p.id,status:"local_only",publerError:msg});
-toast(msg,"error");
-}
-}catch(e){toast("Publer unreachable: "+e.message,"error");}
-};
-const runVerboseDebug=async()=>{
-setVerboseDebugId(p.id);setVerboseResult(null);
-try{
-const tzOff=new Date().getTimezoneOffset();
-const tzSign=tzOff<=0?"+":"-";
-const tzH=String(Math.floor(Math.abs(tzOff)/60)).padStart(2,"0");
-const tzM=String(Math.abs(tzOff)%60).padStart(2,"0");
-const retryTime=new Date(Date.now()+5*60*1000);
-const pad=n=>String(n).padStart(2,"0");
-const retryIso=`${retryTime.getFullYear()}-${pad(retryTime.getMonth()+1)}-${pad(retryTime.getDate())}T${pad(retryTime.getHours())}:${pad(retryTime.getMinutes())}:00${tzSign}${tzH}:${tzM}`;
-const r=await fetch("/api/social-post",{method:"POST",headers:{"Content-Type":"application/json"},
-body:JSON.stringify({action:"send-verbose",post:p.caption,platforms:p.platforms,mediaUrls:p.imageUrl?[p.imageUrl]:undefined,link:p.link||undefined,scheduleDate:retryIso})});
-const data=await r.json();
-setVerboseResult(data);
-}catch(e){setVerboseResult({error:e.message});}
-};
-const isEditing=editingPostId===p.id;
-const saveEdit=async()=>{
-if(!editDraft.caption?.trim()){toast("Caption required","error");return;}
-if(editDraft.scheduleAt){
-const tzOff=new Date().getTimezoneOffset();
-const tzSign=tzOff<=0?"+":"-";
-const tzH=String(Math.floor(Math.abs(tzOff)/60)).padStart(2,"0");
-const tzM=String(Math.abs(tzOff)%60).padStart(2,"0");
-const chosen=new Date(`${editDraft.scheduleAt}T${editDraft.scheduleTime||"09:00"}:00${tzSign}${tzH}:${tzM}`);
-if(chosen<=new Date()){
-const n=new Date(Date.now()+5*60*1000);
-toast(`${editDraft.scheduleTime||"09:00"} is in the past — pick a time after ${String(n.getHours()).padStart(2,"0")}:${String(n.getMinutes()).padStart(2,"0")} (your local time)`,"error");
-return;
-}
-}
-dispatch("UPDATE_SOCIAL_POST",{id:p.id,caption:editDraft.caption,platforms:editDraft.platforms||p.platforms,date:editDraft.scheduleAt||p.date,time:editDraft.scheduleTime||p.time,status:"local_only",publerError:"Edited — click Retry to re-send to Publer"});
-setEditingPostId(null);
-toast("Post updated — click Retry to re-send to Publer","info");
-};
-return(
-<div key={p.id} className="card" style={{padding:"12px 16px",borderLeft:isLocalOnly?`3px solid ${B.red}`:"none"}}>
-<div style={{display:"flex",gap:12,alignItems:"flex-start"}}>
-{p.imageUrl&&<img src={p.imageUrl} style={{width:60,height:60,objectFit:"cover",borderRadius:6,flexShrink:0}} alt=""/>}
-<div style={{flex:1,minWidth:0}}>
-<div style={{display:"flex",gap:5,marginBottom:6,flexWrap:"wrap",alignItems:"center"}}>
-{(p.platforms||[]).map(pl=>(
-<span key={pl} style={{background:PLATFORM_COLORS[pl]||B.purple,color:"#fff",borderRadius:3,padding:"2px 7px",fontSize:8,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700}}>{pl.toUpperCase()}</span>
-))}
-<span style={{background:`${sc}14`,color:sc,border:`1px solid ${sc}30`,borderRadius:3,padding:"1px 7px",fontSize:8,fontFamily:"'Lexend Zetta',sans-serif",letterSpacing:.5}}>{isLocalOnly?"⚠ PUBLER FAILED":(p.status||"draft").toUpperCase()}</span>
-{p.date&&<span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{p.date}{p.time?` @ ${p.time}`:""}</span>}
-{p._campaignName&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.orange,background:`${B.orange}14`,padding:"1px 6px",borderRadius:3}}>📣 {p._campaignName}</span>}
-{p._source==="campaign_draft"&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.muted,background:B.surface,padding:"1px 6px",borderRadius:3}}>DRAFT</span>}
-{isLocalOnly&&<button onClick={retryPost} style={{background:B.orange,color:B.white,border:"none",borderRadius:3,padding:"2px 9px",fontSize:8,fontFamily:"'Lexend Zetta',sans-serif",cursor:"pointer",letterSpacing:.3}}>↻ RETRY TO PUBLER</button>}
-{!isLocalOnly&&p.status!=="draft"&&<button onClick={retryPost} style={{background:"none",color:B.muted,border:`1px solid ${B.border}`,borderRadius:3,padding:"2px 9px",fontSize:8,fontFamily:"'Lexend Zetta',sans-serif",cursor:"pointer",letterSpacing:.3}}>↻ RESEND</button>}
-{p.status!=="draft"&&<button onClick={runVerboseDebug} style={{background:"none",color:B.blue,border:`1px solid ${B.blue}`,borderRadius:3,padding:"2px 9px",fontSize:8,fontFamily:"'Lexend Zetta',sans-serif",cursor:"pointer",letterSpacing:.3}}>🔍 DEBUG</button>}
-</div>
-{isLocalOnly&&p.publerError&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.red,marginBottom:4}}>Error: {p.publerError}</div>}
-{verboseDebugId===p.id&&verboseResult&&(
-<div style={{background:B.surface,border:`1px solid ${B.border}`,borderRadius:4,padding:"8px 10px",marginBottom:6,fontSize:10,fontFamily:"'Lexend',sans-serif"}}>
-<div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.blue,letterSpacing:.5,marginBottom:4}}>DEBUG SEND RESULT</div>
-<div style={{marginBottom:6}}><b>Verdict:</b> <span style={{color:(verboseResult.verdict||"").startsWith("SUCCESS")?B.green:B.red,fontWeight:700}}>{verboseResult.verdict||"?"}</span></div>
-<div style={{marginBottom:4}}><b>Workspace:</b> {verboseResult.workspaceId} | <b>Account:</b> {verboseResult.accountId}</div>
-{(verboseResult.attempts||[]).map((a,i)=>(
-<div key={i} style={{marginBottom:3,padding:"3px 6px",background:a.ok||a.status===200||a.status===201?`${B.green}10`:`${B.red}08`,borderRadius:3,border:`1px solid ${a.ok||a.status===200||a.status===201?B.green:B.red}20`,fontSize:9}}>
-<b style={{color:a.ok||a.status===200||a.status===201?B.green:B.red}}>{a.label}</b> → HTTP {a.status} | {JSON.stringify(a.response).slice(0,120)}
-</div>
-))}
-{verboseResult.top5PostsAfter&&<div style={{marginTop:4,fontSize:9}}><b>Top 5 after:</b> {verboseResult.top5PostsAfter.map(sp=><span key={sp.id} style={{marginRight:6}}>[{sp.id}] "{sp.text||"(empty)"}"</span>)}</div>}
-{verboseResult.error&&<div style={{color:B.red}}><b>Error:</b> {verboseResult.error}</div>}
-<button onClick={()=>{setVerboseDebugId(null);setVerboseResult(null);}} style={{marginTop:4,background:"none",border:`1px solid ${B.border}`,borderRadius:3,padding:"2px 7px",fontSize:8,cursor:"pointer",color:B.muted}}>✕ CLOSE</button>
-</div>
-)}
-{!isEditing&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,lineHeight:1.5}}>{p.caption}</div>}
-</div>
-<div style={{display:"flex",gap:4,flexShrink:0}}>
-<button onClick={()=>{if(isEditing){setEditingPostId(null);}else{setEditingPostId(p.id);setEditDraft({caption:p.caption||"",platforms:p.platforms||[],scheduleAt:p.date||"",scheduleTime:p.time||"09:00"});}}} style={{background:isEditing?"none":B.surface,border:`1px solid ${B.border}`,borderRadius:4,padding:"4px 8px",fontSize:9,fontFamily:"'Lexend',sans-serif",color:B.muted,cursor:"pointer"}}>{isEditing?"✕":"EDIT"}</button>
-{p._source==="standalone"&&(
-<button onClick={()=>{if(window.confirm("Delete this post?"))dispatch("DELETE_SOCIAL_POST",p.id);}} style={{background:"none",border:`1px solid ${B.border}`,borderRadius:4,padding:"4px 8px",fontSize:9,fontFamily:"'Lexend',sans-serif",color:B.muted,cursor:"pointer"}}>✕</button>
-)}
-</div>
-</div>
-{isEditing&&(
-<div style={{marginTop:12,paddingTop:12,borderTop:`1px solid ${B.border}`}}>
-<textarea value={editDraft.caption} onChange={e=>setEditDraft(d=>({...d,caption:e.target.value}))} rows={4} style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"8px 10px",fontSize:12,fontFamily:"'Lexend',sans-serif",resize:"vertical",lineHeight:1.6,marginBottom:8}}/>
-<div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:8}}>
-<div>
-<div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5,marginBottom:4}}>DATE</div>
-<input type="date" value={editDraft.scheduleAt} min={today()} onChange={e=>setEditDraft(d=>({...d,scheduleAt:e.target.value}))} style={{width:"100%",background:B.white,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"6px 8px",fontSize:11}}/>
-</div>
-<div>
-<div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5,marginBottom:4}}>TIME</div>
-<input type="time" value={editDraft.scheduleTime} onChange={e=>setEditDraft(d=>({...d,scheduleTime:e.target.value}))} style={{width:"100%",background:B.white,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"6px 8px",fontSize:11}}/>
-</div>
-</div>
-<button onClick={saveEdit} style={{background:B.orange,color:B.white,border:"none",borderRadius:4,padding:"7px 18px",fontSize:10,fontFamily:"'Lexend Zetta',sans-serif",cursor:"pointer",fontWeight:700}}>SAVE CHANGES</button>
-</div>
-)}
-</div>
-);
-})}
-</div>
-)}
-</div>
-)}
-{/* ── NEW POST ──────────────────────────────────────────────────────── */}
-{tab==="new"&&(
-<div style={{maxWidth:640}}>
-<div className="card" style={{padding:22}}>
-<div style={{fontFamily:"'Russo One',sans-serif",fontSize:14,color:B.black,letterSpacing:.2,marginBottom:18}}>NEW POST</div>
-{/* Platforms */}
-<div style={{marginBottom:16}}>
-<Lbl s={{marginBottom:8}}>PLATFORMS</Lbl>
-<div style={{display:"flex",gap:7,flexWrap:"wrap"}}>
-{SOCIAL_PLATFORMS.map(pl=>{
-const on=platforms.includes(pl);
-const col=PLATFORM_COLORS[pl];
-return(<button key={pl} onClick={()=>setPlatforms(p=>on?p.filter(x=>x!==pl):[...p,pl])} style={{background:on?col:B.surface,color:on?"#fff":B.muted,border:`2px solid ${on?col:B.border}`,borderRadius:5,padding:"8px 16px",fontSize:11,fontFamily:"'Lexend',sans-serif",cursor:"pointer",fontWeight:on?600:400}}>{pl.charAt(0).toUpperCase()+pl.slice(1)}</button>);
-})}
-</div>
-</div>
-{/* Post type */}
-<div style={{marginBottom:16}}>
-<Lbl s={{marginBottom:7}}>POST TYPE</Lbl>
-<div style={{display:"flex",gap:6}}>
-{["post","story","reel"].map(t=>(
-<button key={t} onClick={()=>setPostType(t)} style={{background:postType===t?`${B.orange}14`:B.surface,color:postType===t?B.orange:B.muted,border:`1px solid ${postType===t?B.orange:B.border}`,borderRadius:3,padding:"5px 14px",fontSize:10,fontFamily:"'Lexend',sans-serif",cursor:"pointer"}}>{t.toUpperCase()}</button>
-))}
-</div>
-</div>
-{/* Tone */}
-<div style={{marginBottom:16}}>
-<Lbl s={{marginBottom:7}}>TONE</Lbl>
-<div style={{display:"flex",gap:6}}>
-{["Hype","Professional","Educational"].map(t=>(
-<button key={t} onClick={()=>setTone(t)} style={{background:tone===t?`${B.orange}14`:B.surface,color:tone===t?B.orange:B.muted,border:`1px solid ${tone===t?B.orange:B.border}`,borderRadius:3,padding:"5px 14px",fontSize:10,fontFamily:"'Lexend',sans-serif",cursor:"pointer"}}>{t}</button>
-))}
-</div>
-</div>
-{/* Topic + Product (help AI write better) */}
-<div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:16}}>
-<div>
-<Lbl s={{marginBottom:5}}>TOPIC (helps AI write)</Lbl>
-<input value={topic} onChange={e=>setTopic(e.target.value)} placeholder="New track gear, baseball season…" style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 10px",fontSize:12,fontFamily:"'Lexend',sans-serif"}}/>
-</div>
-<div>
-<Lbl s={{marginBottom:5}}>PRODUCT (optional)</Lbl>
-<input value={product} onChange={e=>setProduct(e.target.value)} placeholder="Blazer blocks, Gill discus…" style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 10px",fontSize:12,fontFamily:"'Lexend',sans-serif"}}/>
-</div>
-</div>
-{/* Caption */}
-<div style={{marginBottom:16}}>
-<div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:6}}>
-<Lbl>CAPTION</Lbl>
-<div style={{display:"flex",gap:5,alignItems:"center",flexWrap:"wrap",justifyContent:"flex-end"}}>
-{["short","medium","long"].map(l=>(
-<button key={l} onClick={()=>setPostLength(l)} style={{background:postLength===l?`${B.purple}18`:B.surface,color:postLength===l?B.purple:B.muted,border:`1px solid ${postLength===l?B.purple:B.border}`,borderRadius:3,padding:"3px 8px",fontSize:9,fontFamily:"'Lexend',sans-serif",cursor:"pointer"}}>{l.toUpperCase()}</button>
-))}
-<button onClick={generateCaption} disabled={genRunning} style={{background:B.purple,color:B.white,border:"none",borderRadius:4,padding:"5px 12px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,cursor:"pointer",opacity:genRunning?0.7:1}}>
-{genRunning?"✦ WRITING…":"✦ AI WRITE"}
-</button>
-<button onClick={generatePerPlatform} disabled={genRunning||!platforms.length} style={{background:"transparent",color:B.blue,border:`1px solid ${B.blue}`,borderRadius:4,padding:"5px 10px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",cursor:"pointer",opacity:(genRunning||!platforms.length)?0.5:1}} title="Generate separate captions per platform">
-PER PLATFORM
-</button>
-</div>
-</div>
-<textarea value={caption} onChange={e=>setCaption(e.target.value)} rows={5} placeholder="Write your caption… or let AI draft it" style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"8px 10px",fontSize:12,fontFamily:"'Lexend',sans-serif",resize:"vertical",lineHeight:1.6}}/>
-<div style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted,marginTop:3,textAlign:"right"}}>{caption.length} chars</div>
-{/* Per-platform variants */}
-{platformVariants&&(
-<div style={{marginTop:10}}>
-<div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.muted,letterSpacing:1.5,marginBottom:7}}>PER-PLATFORM VARIANTS — click USE THIS to load into caption</div>
-<div style={{display:"flex",flexDirection:"column",gap:7}}>
-{platforms.map(pl=>{
-const key=pl.toLowerCase();
-const data=platformVariants[key];
-if(!data) return null;
-const col=PLATFORM_COLORS[pl]||B.blue;
-const tags=Array.isArray(data.hashtags)?data.hashtags:[];
-const full=data.caption+(tags.length?"\n\n"+tags.join(" "):"");
-return(
-<div key={pl} style={{background:B.surface,borderRadius:5,border:`1px solid ${B.border}`,borderLeft:`3px solid ${col}`,padding:"9px 11px"}}>
-<div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:5}}>
-<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:col,letterSpacing:1.5}}>{pl.toUpperCase()}</span>
-<div style={{display:"flex",gap:5}}>
-<button onClick={()=>navigator.clipboard?.writeText(full)} style={{background:B.white,border:`1px solid ${B.border}`,color:B.muted,borderRadius:3,padding:"2px 8px",fontSize:8,fontFamily:"'Lexend Zetta',sans-serif",cursor:"pointer"}}>COPY</button>
-<button onClick={()=>setCaption(full)} style={{background:col,color:"#fff",border:"none",borderRadius:3,padding:"2px 8px",fontSize:8,fontFamily:"'Lexend Zetta',sans-serif",cursor:"pointer"}}>USE THIS ↑</button>
-</div>
-</div>
-<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,lineHeight:1.7,marginBottom:tags.length?6:0}}>{data.caption}</div>
-{tags.length>0&&(
-<div style={{display:"flex",flexWrap:"wrap",gap:3}}>
-{tags.map((tag,i)=><span key={i} style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:col,background:`${col}12`,border:`1px solid ${col}30`,borderRadius:3,padding:"1px 6px"}}>{tag}</span>)}
-</div>
-)}
-</div>
-);
-})}
-</div>
-</div>
-)}
-</div>
-{/* Image — with AI generator panel */}
-<div style={{marginBottom:14}}>
-<div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
-<Lbl>IMAGE (optional)</Lbl>
-<button onClick={()=>setShowImgGen(v=>!v)} style={{background:showImgGen?`${B.orange}14`:"transparent",color:B.orange,border:`1px solid ${B.orange}`,borderRadius:4,padding:"3px 10px",fontSize:8,fontFamily:"'Lexend Zetta',sans-serif",letterSpacing:.5,cursor:"pointer"}}>
-{showImgGen?"HIDE GENERATOR":"⚡ AI GENERATE"}
-</button>
-</div>
-{showImgGen&&(
-<div style={{background:B.surface,borderRadius:6,border:`1px solid ${B.border}`,padding:14,marginBottom:12}}>
-<div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:1.5,marginBottom:10}}>AI IMAGE GENERATOR — uses topic + product above</div>
-<div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:9,marginBottom:9}}>
-<div>
-<Lbl s={{marginBottom:4}}>USE CASE</Lbl>
-<select value={imgUseCase} onChange={e=>setImgUseCase(e.target.value)} style={{width:"100%",background:B.white,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"6px 9px",fontSize:11}}>
-{["Social Post","Product Promo","Email Banner","Event Flyer"].map(u=><option key={u}>{u}</option>)}
-</select>
-</div>
-<div>
-<Lbl s={{marginBottom:4}}>MOOD</Lbl>
-<div style={{display:"flex",gap:5}}>
-{["Bold","Clean","Energetic"].map(m=>(
-<button key={m} onClick={()=>setImgMood(m)} style={{background:imgMood===m?`${B.orange}14`:B.white,color:imgMood===m?B.orange:B.muted,border:`1px solid ${imgMood===m?B.orange:B.border}`,borderRadius:3,padding:"4px 10px",fontSize:10,fontFamily:"'Lexend',sans-serif",cursor:"pointer"}}>{m}</button>
-))}
-</div>
-</div>
-</div>
-<div style={{marginBottom:10}}>
-<Lbl s={{marginBottom:4}}>ACCENT COLORS (optional)</Lbl>
-<input value={imgColors} onChange={e=>setImgColors(e.target.value)} placeholder="navy blue, gold, white…" style={{width:"100%",background:B.white,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"6px 9px",fontSize:11,fontFamily:"'Lexend',sans-serif"}}/>
-</div>
-<button onClick={generateAiImage} disabled={imgGenerating} style={{background:imgGenerating?B.border:B.orange,color:"#fff",border:"none",borderRadius:4,padding:"7px 16px",fontSize:10,fontFamily:"'Lexend Zetta',sans-serif",letterSpacing:.5,cursor:imgGenerating?"default":"pointer"}}>
-{imgGenerating?"GENERATING IMAGE…":"GENERATE IMAGE →"}
-</button>
-{imgError&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.red,marginTop:7}}>{imgError}</div>}
-{imgPrompt&&imgGenerating&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginTop:7,lineHeight:1.5}}>{imgPrompt}</div>}
-{imageUrl&&!imgGenerating&&(
-<div style={{marginTop:10}}>
-<img src={imageUrl} alt="Generated" style={{width:"100%",borderRadius:6,display:"block",marginBottom:6}}/>
-<button onClick={()=>{const a=document.createElement("a");a.href=imageUrl;a.download=`st1-social-${Date.now()}.jpg`;a.click();}} style={{background:B.surface,border:`1px solid ${B.border}`,color:B.muted,borderRadius:4,padding:"4px 10px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",cursor:"pointer"}}>↓ DOWNLOAD</button>
-</div>
-)}
-</div>
-)}
-</div>
-{/* Link */}
-<div style={{marginBottom:14}}>
-<Lbl s={{marginBottom:5}}>LINK URL (optional)</Lbl>
-<input value={linkUrl} onChange={e=>setLinkUrl(e.target.value)} placeholder="https://st1sports.com/..." style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 10px",fontSize:12,fontFamily:"'Lexend',sans-serif"}}/>
-</div>
-{/* Campaign link */}
-{campaigns.length>0&&(
-<div style={{marginBottom:14}}>
-<Lbl s={{marginBottom:5}}>LINK TO CAMPAIGN (optional)</Lbl>
-<select value={linkedCampId} onChange={e=>setLinkedCampId(e.target.value)} style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 10px",fontSize:12}}>
-<option value="">Standalone post</option>
-{campaigns.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}
-</select>
-</div>
-)}
-{/* Schedule */}
-<div style={{marginBottom:20,padding:"12px 14px",background:B.surface,borderRadius:6,border:`1px solid ${B.border}`}}>
-<Lbl s={{marginBottom:8}}>SCHEDULE</Lbl>
-<div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
-<div>
-<div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5,marginBottom:4}}>DATE (blank = post now)</div>
-<input type="date" value={scheduleAt} min={today()} onChange={e=>{
-const d=e.target.value; setScheduleAt(d);
-if(d===today()){const n=new Date(Date.now()+15*60*1000);setScheduleTime(`${String(n.getHours()).padStart(2,"0")}:${String(n.getMinutes()).padStart(2,"0")}`);}
-}} style={{width:"100%",background:B.white,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"6px 8px",fontSize:12}}/>
-</div>
-<div>
-<div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5,marginBottom:4}}>TIME{scheduleAt===today()&&<span style={{color:B.orange}}> — must be after {nowPlusMin(5)}</span>}</div>
-<input type="time" value={scheduleTime}
-min={scheduleAt===today()?nowPlusMin(5):undefined}
-onChange={e=>setScheduleTime(e.target.value)}
-style={{width:"100%",background:B.white,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"6px 8px",fontSize:12}}/>
-</div>
-</div>
-</div>
-{!platforms.length&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.red,marginBottom:10}}>Select at least one platform</div>}
-<OBtn onClick={submitPost} disabled={posting||!caption.trim()||!platforms.length} style={{width:"100%",justifyContent:"center"}}>
-{posting?"POSTING…":(scheduleAt?`🗓 SCHEDULE FOR ${scheduleAt}`:"📣 POST NOW")}
-</OBtn>
-</div>
-</div>
 )}
 </div>
 );
@@ -14192,7 +13376,6 @@ dispatch("ADD_BRAND_ASSET",{id:mkId(),...form,createdAt:new Date().toISOString()
 setForm({name:"",url:"",type:"logo"});
 toast("Asset added!","success");
 };
-const lastAdUrl=(s.savedAds||[]).filter(a=>a.imageUrl).slice(-1)[0]?.imageUrl;
 return(
 <div style={{borderTop:`1px solid ${B.border}`,paddingTop:12}}>
 <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:1,marginBottom:9}}>ADD ASSET</div>
@@ -14205,7 +13388,6 @@ return(
 </div>
 <div style={{display:"flex",gap:7}}>
 <OBtn sm onClick={handleAdd}>+ ADD ASSET</OBtn>
-{lastAdUrl&&<button onClick={()=>setForm(f=>({...f,url:lastAdUrl,name:f.name||"Ad Engine Image",type:"banner"}))} style={{background:B.purpleBg,color:B.purple,border:`1px solid ${B.purple}40`,borderRadius:4,padding:"5px 12px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,cursor:"pointer",letterSpacing:.3}}>USE FROM AD ENGINE</button>}
 </div>
 </div>
 );
@@ -14755,13 +13937,6 @@ const [repForm,setRepForm]=useState(null);
 const [gmailStatus,setGmailStatus]=useState(null);
 const [gmailInfo,setGmailInfo]=useState(null);
 const [gmailChecking,setGmailChecking]=useState(false);
-const [publerInfo,setPublerInfo]=useState(null);
-const [publerChecking,setPublerChecking]=useState(false);
-const [publerPosts,setPublerPosts]=useState(null);
-const [publerPostsLoading,setPublerPostsLoading]=useState(false);
-const [publerAccounts,setPublerAccounts]=useState(null);
-const [publerSendDebug,setPublerSendDebug]=useState(null);
-const [publerSendDebugging,setPublerSendDebugging]=useState(false);
 const testRepEmail=async(rep)=>{
 const fromLabel = rep.gmailEnvKey ? `${rep.gmailEnvKey}'s Gmail` : "shared Gmail";
 if(rep.gmailEnvKey){
@@ -14801,7 +13976,6 @@ else{dispatch("ADD_REP",{...repForm,id:mkId()});toast("Rep added","success");}
 setRepForm(null);
 };
 const repGmailKey = (cu && !cu.isAdmin && cu?.gmailEnvKey) ? cu.gmailEnvKey : "";
-const failedPosts=(s.socialPosts||[]).filter(p=>p.status==="local_only");
 const checkGmail=async()=>{
 setGmailChecking(true);setGmailInfo(null);
 try{
@@ -14810,51 +13984,11 @@ setGmailInfo(d.error?{error:d.error}:{email:d.email});
 }catch(e){setGmailInfo({error:e.message});}
 setGmailChecking(false);
 };
-const checkPubler=async()=>{
-setPublerChecking(true);setPublerInfo(null);
-try{
-const d=await fetch("/api/social-post",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"test"})}).then(r=>r.json());
-setPublerInfo(d.ok?{name:d.user?.name}:{error:d.error||"Connection failed"});
-}catch(e){setPublerInfo({error:e.message});}
-setPublerChecking(false);
-};
-const loadPublerPosts=async()=>{
-setPublerPostsLoading(true);setPublerPosts(null);
-try{
-const d=await fetch("/api/social-post",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"list-posts"})}).then(r=>r.json());
-setPublerPosts(d);
-}catch(e){setPublerPosts({error:e.message});}
-setPublerPostsLoading(false);
-};
-const loadPublerAccounts=async()=>{
-try{
-const d=await fetch("/api/social-post",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"profiles"})}).then(r=>r.json());
-setPublerAccounts(d);
-}catch(e){setPublerAccounts({error:e.message});}
-};
-const testSendToPubler=async()=>{
-setPublerSendDebugging(true);setPublerSendDebug(null);
-const n=new Date(Date.now()+5*60*1000);
-const pad=v=>String(v).padStart(2,"0");
-const tzOff=new Date().getTimezoneOffset();
-const tzSign=tzOff<=0?"+":"-";
-const tzH=pad(Math.floor(Math.abs(tzOff)/60));
-const tzM=pad(Math.abs(tzOff)%60);
-const scheduleDate=`${n.getFullYear()}-${pad(n.getMonth()+1)}-${pad(n.getDate())}T${pad(n.getHours())}:${pad(n.getMinutes())}:00${tzSign}${tzH}:${tzM}`;
-const platforms=(publerAccounts?.profiles||[]).map(a=>a.service).filter(Boolean);
-const testPlatforms=platforms.length?[platforms[0]]:["instagram"];
-try{
-const d=await fetch("/api/social-post",{method:"POST",headers:{"Content-Type":"application/json"},
-body:JSON.stringify({action:"send-verbose",post:"ST1 RevOps test post — please delete",platforms:testPlatforms,scheduleDate})}).then(r=>r.json());
-setPublerSendDebug(d);
-}catch(e){setPublerSendDebug({error:e.message});}
-setPublerSendDebugging(false);
-};
 useEffect(()=>{
 fetch("/api/gmail",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"profile"})})
 .then(r=>r.json()).then(d=>setGmailStatus(!d.error&&(d.email||d.emailAddress||d.profile)))
 .catch(()=>setGmailStatus(false));
-if (cu?.isAdmin) { checkGmail(); checkPubler(); }
+if (cu?.isAdmin) { checkGmail(); }
 },[]);
 if (cu && !cu.isAdmin) {
 const myRep = (s.reps||[]).find(r=>r.id===cu?.id) || cu;
@@ -14938,9 +14072,9 @@ style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B
 </div>
 <OBtn onClick={save}>SAVE SETTINGS</OBtn>
 </div>
-{/* Email & Social connection status */}
+{/* Email connection status */}
 <div className="card" style={{padding:16,marginBottom:13,borderTop:`3px solid ${B.green}`}}>
-<Lbl c={B.green} s={{marginBottom:12}}>Email & Social Status</Lbl>
+<Lbl c={B.green} s={{marginBottom:12}}>Email Status</Lbl>
 {/* Gmail */}
 <div style={{marginBottom:14}}>
 <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:6}}>
@@ -14977,147 +14111,6 @@ gmailInfo.error
 )}
 {!gmailInfo&&!gmailChecking&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>Click Test to check connection.</div>}
 </div>
-{/* Publer */}
-<div style={{marginBottom:failedPosts.length>0?14:0}}>
-<div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:6}}>
-<div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.text,letterSpacing:.5}}>PUBLER (social media posting)</div>
-<div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
-<button onClick={loadPublerAccounts} style={{background:"none",border:`1px solid ${B.border}`,borderRadius:3,padding:"2px 8px",fontSize:9,fontFamily:"'Lexend',sans-serif",color:B.muted,cursor:"pointer"}}>👤 Accounts</button>
-<button onClick={loadPublerPosts} disabled={publerPostsLoading} style={{background:"none",border:`1px solid ${B.border}`,borderRadius:3,padding:"2px 8px",fontSize:9,fontFamily:"'Lexend',sans-serif",color:B.muted,cursor:"pointer"}}>{publerPostsLoading?"Loading…":"🔍 Queue"}</button>
-<button onClick={checkPubler} disabled={publerChecking} style={{background:"none",border:`1px solid ${B.border}`,borderRadius:3,padding:"2px 8px",fontSize:9,fontFamily:"'Lexend',sans-serif",color:B.muted,cursor:"pointer"}}>{publerChecking?"Checking…":"↻ Test"}</button>
-<button onClick={testSendToPubler} disabled={publerSendDebugging} style={{background:B.purple,color:B.white,border:"none",borderRadius:3,padding:"2px 8px",fontSize:9,fontFamily:"'Lexend',sans-serif",cursor:"pointer"}}>{publerSendDebugging?"Sending…":"✉ Test Send"}</button>
-</div>
-</div>
-{publerInfo&&(
-publerInfo.error
-?<div style={{background:`${B.red}08`,border:`1px solid ${B.red}30`,borderRadius:5,padding:"8px 12px",fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.red}}>
-✕ Not connected — {publerInfo.error}
-<div style={{marginTop:4,fontSize:10,color:B.muted}}>Set PUBLER_API_KEY and PUBLER_WORKSPACE_ID in Vercel env vars. Get them from app.publer.com → Settings → API.</div>
-</div>
-:<div style={{background:`${B.green}08`,border:`1px solid ${B.green}30`,borderRadius:5,padding:"8px 12px",fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.green}}>
-✓ Connected — {publerInfo.name}
-</div>
-)}
-{!publerInfo&&!publerChecking&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>Click Test to check connection.</div>}
-{publerAccounts&&(
-<div style={{marginTop:8,background:B.surface,border:`1px solid ${B.border}`,borderRadius:5,padding:"10px 12px"}}>
-{publerAccounts.error
-?<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.red}}>Error: {publerAccounts.error}</div>
-:<>
-<div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5,marginBottom:6}}>CONNECTED ACCOUNTS — copy IDs to Vercel env vars</div>
-{(publerAccounts.profiles||[]).map((a,i)=>(
-<div key={i} style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.text,padding:"3px 0",borderBottom:`1px solid ${B.border}`,display:"flex",gap:8,alignItems:"center"}}>
-<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.blue,minWidth:60}}>{a.service?.toUpperCase()||"?"}</span>
-<span style={{flex:1}}>{a.name}</span>
-<span style={{fontFamily:"monospace",fontSize:9,color:B.orange,background:`${B.orange}10`,padding:"1px 6px",borderRadius:3,userSelect:"all"}}>{a.id}</span>
-<span style={{fontSize:9,color:a.connected?B.green:B.red}}>{a.connected?"✓":"⚠ reconnect"}</span>
-</div>
-))}
-<div style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted,marginTop:6}}>In Vercel → Settings → Environment Variables, add: PUBLER_ACCOUNT_INSTAGRAM, PUBLER_ACCOUNT_FACEBOOK, etc. with the IDs shown above.</div>
-</>
-}
-</div>
-)}
-{publerSendDebug&&(
-<div style={{marginTop:8,background:B.surface,border:`1px solid ${B.border}`,borderRadius:5,padding:"10px 12px",fontSize:10,fontFamily:"'Lexend',sans-serif"}}>
-<div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:6}}>
-<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.purple,letterSpacing:.5}}>✉ TEST SEND RESULT</span>
-<button onClick={()=>setPublerSendDebug(null)} style={{background:"none",border:"none",cursor:"pointer",color:B.muted,fontSize:10}}>✕</button>
-</div>
-{publerSendDebug.error&&<div style={{color:B.red,marginBottom:4}}><b>Error:</b> {publerSendDebug.error}</div>}
-<div style={{marginBottom:6}}><b>Verdict:</b> <span style={{color:(publerSendDebug.verdict||"").startsWith("SUCCESS")?B.green:B.red,fontWeight:700}}>{publerSendDebug.verdict||"?"}</span></div>
-<div style={{marginBottom:3}}><b>Workspace:</b> {publerSendDebug.workspaceId}</div>
-<div style={{marginBottom:3}}><b>Env account ID:</b> {publerSendDebug.envAccountId||"not set"}</div>
-<div style={{marginBottom:3}}><b>Live /accounts ID:</b> {publerSendDebug.liveAccountId||"none"}</div>
-<div style={{marginBottom:3}}><b>Live /profiles ID:</b> {publerSendDebug.profileId||"none"}</div>
-<div style={{marginBottom:3}}><b>All live accounts:</b> <code style={{fontSize:8}}>{JSON.stringify(publerSendDebug.accountLookup)}</code></div>
-{(publerSendDebug.attempts||[]).map((a,i)=>(
-<div key={i} style={{marginBottom:3,padding:"3px 6px",background:a.ok||a.status===200||a.status===201?`${B.green}10`:`${B.red}08`,borderRadius:3,border:`1px solid ${a.ok||a.status===200||a.status===201?B.green:B.red}20`}}>
-<b style={{color:a.ok||a.status===200||a.status===201?B.green:B.red}}>{a.label}</b> → HTTP {a.status} | {JSON.stringify(a.response).slice(0,120)}
-</div>
-))}
-{publerSendDebug.jobId&&<div style={{marginBottom:4}}><b>Job ID:</b> <code style={{fontSize:9}}>{publerSendDebug.jobId}</code></div>}
-{publerSendDebug.jobStatus&&<div style={{marginBottom:4,padding:"4px 6px",background:`${B.blue}08`,border:`1px solid ${B.blue}20`,borderRadius:3}}><b>Job status:</b> <code style={{fontSize:8,wordBreak:"break-all"}}>{JSON.stringify(publerSendDebug.jobStatus)}</code></div>}
-{publerSendDebug.postCounts&&(
-<div style={{marginTop:4}}>
-<b>Publer posts after:</b>
-{Object.entries(publerSendDebug.postCounts).map(([state,posts])=>(
-<div key={state} style={{marginLeft:8,marginTop:2}}>
-<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.muted}}>{state.toUpperCase()} ({Array.isArray(posts)?posts.length:"err"}):</span>
-{Array.isArray(posts)&&posts.map(sp=><div key={sp.id} style={{marginLeft:8,fontSize:9}}>[{sp.id}] "{sp.text||"(empty)"}"</div>)}
-</div>
-))}
-</div>
-)}
-</div>
-)}
-{publerPosts&&(
-<div style={{marginTop:8,background:B.surface,border:`1px solid ${B.border}`,borderRadius:5,padding:"10px 12px"}}>
-{publerPosts.error
-?<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.red}}>Error: {publerPosts.error}</div>
-:<>
-<div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.muted,letterSpacing:.5,marginBottom:6}}>
-PUBLER QUEUE — {publerPosts.scheduled?.count||publerPosts.count||0} SCHEDULED
-{(publerPosts.failed?.count||0)>0&&<span style={{color:B.red,marginLeft:8}}>{publerPosts.failed.count} FAILED</span>}
-{(publerPosts.draft?.count||0)>0&&<span style={{color:B.orange,marginLeft:8}}>{publerPosts.draft.count} DRAFT</span>}
-<span style={{marginLeft:8,opacity:.6}}>(workspace: {publerPosts.workspaceId})</span>
-</div>
-{(publerPosts.count===0&&(publerPosts.failed?.count||0)===0)
-?<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted}}>No posts found. Check PUBLER_WORKSPACE_ID in Vercel matches what you see in Publer's dashboard URL.</div>
-:<>
-{(publerPosts.posts||[]).map((p,i)=>{
-const accts=(p.accounts||[]);
-const noAcct=accts.length===0;
-return(
-<div key={i} style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.text,padding:"4px 0",borderBottom:`1px solid ${B.border}`}}>
-<span style={{color:B.muted,marginRight:8}}>{p.scheduled_at?.slice(0,16)?.replace("T"," ")}</span>
-{noAcct
-?<span style={{color:B.red,marginRight:6,fontWeight:600}}>⚠ NO ACCOUNT</span>
-:<span style={{color:"#4ade80",marginRight:6}}>{accts.map(a=>a.name||a.id).join(", ")}</span>
-}
-<span style={{color:B.muted}}>({(p.networks||[]).join("/")})</span>
-{" — "}{p.text}
-</div>
-);
-})}
-{(publerPosts.failed?.posts||[]).length>0&&(
-<div style={{marginTop:8}}>
-<div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.red,letterSpacing:.5,marginBottom:4}}>FAILED POSTS</div>
-{publerPosts.failed.posts.map((p,i)=>(
-<div key={i} style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.text,padding:"4px 0",borderBottom:`1px solid ${B.border}`}}>
-<span style={{color:B.muted,marginRight:8}}>{p.scheduled_at?.slice(0,16)?.replace("T"," ")}</span>
-<span style={{color:B.red,marginRight:6}}>{p.error||"failed"}</span>
-{" — "}{p.text}
-</div>
-))}
-</div>
-)}
-{publerPosts._rawSample&&(
-<div style={{marginTop:8,padding:"6px 8px",background:B.bg,borderRadius:3,fontFamily:"monospace",fontSize:9,color:B.muted,wordBreak:"break-all",whiteSpace:"pre-wrap"}}>
-<div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,letterSpacing:.5,marginBottom:4}}>RAW PUBLER POST SAMPLE (first result):</div>
-{JSON.stringify(publerPosts._rawSample,null,2).slice(0,800)}
-</div>
-)}
-</>
-}
-</>
-}
-</div>
-)}
-</div>
-{/* Failed posts */}
-{failedPosts.length>0&&(
-<div style={{background:`${B.red}06`,border:`1px solid ${B.red}20`,borderRadius:5,padding:"10px 12px"}}>
-<div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.red,letterSpacing:.5,marginBottom:6}}>{failedPosts.length} POST{failedPosts.length!==1?"S":""} FAILED TO REACH PUBLER</div>
-{failedPosts.map(p=>(
-<div key={p.id} style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,marginBottom:4,display:"flex",justifyContent:"space-between",alignItems:"center",gap:8}}>
-<span style={{flex:1,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{p.caption?.slice(0,60)}…</span>
-<span style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted,flexShrink:0}}>{p.date}</span>
-</div>
-))}
-<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginTop:6}}>Go to Social → All Posts to retry each one.</div>
-</div>
-)}
 </div>
 {/* Sales Reps */}
 <div className="card" style={{padding:16,marginBottom:13,borderTop:`3px solid ${B.blue}`}}>
@@ -15218,7 +14211,6 @@ return(
 {a.type&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.blue,background:B.blueBg,padding:"1px 5px",borderRadius:3}}>{a.type}</span>}
 <div style={{display:"flex",gap:4,marginTop:6,flexWrap:"wrap"}}>
 <button onClick={()=>navigator.clipboard?.writeText(a.url).then(()=>toast("URL copied!","success")).catch(()=>toast("Copy failed","error"))} style={{background:B.blueBg,color:B.blue,border:"none",borderRadius:3,padding:"3px 6px",fontSize:8,fontFamily:"'Lexend Zetta',sans-serif",cursor:"pointer",letterSpacing:.3}}>COPY URL</button>
-<button onClick={()=>{setMod("social");}} style={{background:B.purpleBg,color:B.purple,border:"none",borderRadius:3,padding:"3px 6px",fontSize:8,fontFamily:"'Lexend Zetta',sans-serif",cursor:"pointer",letterSpacing:.3}}>USE IN POST →</button>
 <button onClick={()=>{if(window.confirm(`Delete "${a.name}"?`))dispatch("DELETE_BRAND_ASSET",a.id);}} style={{background:"none",border:"none",color:B.red,fontSize:10,cursor:"pointer",padding:"2px 3px",marginLeft:"auto"}}>✕</button>
 </div>
 </div>
