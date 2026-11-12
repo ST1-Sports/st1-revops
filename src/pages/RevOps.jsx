@@ -1646,7 +1646,7 @@ animation:syncing?"pulse 1s infinite":undefined}}/>
 {mod==="team-stores" &&<Suspense fallback={<PanelLoader/>}><TeamStoresPage/></Suspense>}
 {mod==="flagship-store" &&<Suspense fallback={<PanelLoader/>}><FlagshipStorePage/></Suspense>}
 {/* ── AI Tools (Command Center modules embedded) ── */}
-{mod.startsWith("cc-")&&<Suspense fallback={<PanelLoader/>}><CmdCenter initialModuleId={mod.slice(3)} embedded key={mod} s={s} dispatch={dispatch} toast={toast}/></Suspense>}
+{mod.startsWith("cc-")&&<Suspense fallback={<PanelLoader/>}><CmdCenter initialModuleId={mod.slice(3)} embedded key={mod}/></Suspense>}
 </ErrBound>
 </main>
 </div>
@@ -10032,7 +10032,21 @@ const CHANNELS = [
 {id:"phone",icon:"📞",label:"Phone"},
 {id:"newsletter",icon:"📧",label:"Newsletter"},
 ];
-const METRICS = ["Opens","Clicks","Replies","Meetings Booked","Quotes Sent","Orders","Revenue","Impressions","Engagement Rate","Cost Per Lead"];
+const METRICS = ["Opens","Clicks","Replies","Meetings Booked","Quotes Sent","Orders","Revenue"];
+const LIVE_ASSET_TYPES = ["email3","email5","callscript","directmail"];
+const scrubCampFields = (camp) => {
+if(!camp) return camp;
+const next = {...camp};
+delete next.socialPosts;
+delete next.socialDrafts;
+delete next.adCopy;
+delete next.adIds;
+delete next.adCopyDate;
+if(Array.isArray(next.assetTypes)) next.assetTypes = next.assetTypes.filter(t=>LIVE_ASSET_TYPES.includes(t));
+if(Array.isArray(next.channels)) next.channels = next.channels.filter(ch=>ch!=="social"&&ch!=="paid_ads");
+if(Array.isArray(next.metrics)) next.metrics = next.metrics.filter(m=>m!=="Impressions"&&m!=="Engagement Rate"&&m!=="Cost Per Lead");
+return next;
+};
 const startNewCampaign = () => {
 setSelCampId(null);
 setSegResult(null);
@@ -10049,7 +10063,7 @@ product:tpl.product||"Track & Field Equipment",
 audience:"Athletic Director",
 tone:tpl.tone||"friendly",
 ctx:tpl.ctx||"",
-touches:[],socialDrafts:[],adCopy:"",callScript:"",directMail:"",
+touches:[],callScript:"",directMail:"",
 startDate:today(),endDate:"",
 goal:tpl.goal||"",
 channels:tpl.channels||[],
@@ -10250,7 +10264,7 @@ const saveCampaign = () => {
 if(!campDraft) return;
 const audienceModeCheck = campDraft.audienceMode||"ai";
 const hasListSelected = audienceModeCheck==="list"&&campDraft.audienceListId;
-const hasAnyContent = (campDraft?.touches||[]).length>0||(campDraft?.adCopy||"").trim()||(campDraft?.callScript||"").trim()||(campDraft?.directMail||"").trim()||(campDraft?.socialDrafts||[]).length>0;
+const hasAnyContent = (campDraft?.touches||[]).length>0||(campDraft?.callScript||"").trim()||(campDraft?.directMail||"").trim();
 const types = campDraft?.assetTypes||[];
 if(!hasListSelected&&types.length>0&&!hasAnyContent){toast("Generate at least one asset before launching, or switch to FROM LIST mode to launch and add email templates later.","error");return;}
 const contacts = s.contacts||[];
@@ -10280,7 +10294,7 @@ enrollments=seg.map(c=>({contactId:c.id,step:0,status:"active",enrolledAt:todayS
 const isEditing = !!campDraft.id;
 const campId = campDraft.id || mkId();
 const existingCamp = isEditing ? campaigns.find(c=>c.id===campId) : null;
-const camp = {
+const camp = scrubCampFields({
 ...(existingCamp||{}),
 id: campId,
 name: campDraft.name||`${campDraft.product} — ${campDraft.audience}`,
@@ -10293,12 +10307,8 @@ startDate,
 endDate: campDraft.endDate||"",
 touches: campDraft.touches,
 enrollments,
-socialPosts: existingCamp?.socialPosts||[],
-socialDrafts: campDraft.socialDrafts||[],
-adCopy: campDraft.adCopy||"",
 callScript: campDraft.callScript||"",
 directMail: campDraft.directMail||"",
-adIds: existingCamp?.adIds||[],
 channels: campDraft.channels||[],
 metrics: campDraft.metrics||[],
 assetTypes: campDraft.assetTypes||[],
@@ -10311,7 +10321,7 @@ batchSize,
 status: isEditing ? (existingCamp?.status||"running") : "running",
 createdAt: existingCamp?.createdAt||todayStr,
 color: existingCamp?.color||CAMP_COLORS[campaigns.length % CAMP_COLORS.length],
-};
+});
 if(isEditing) dispatch("UPDATE_CAMPAIGN", camp);
 else dispatch("ADD_CAMPAIGN", camp);
 if(!isEditing) seg.forEach(c=>dispatch("SCORE_CONTACT",{contactId:c.id,type:"enrolled",campaignId:campId,note:`Enrolled in ${camp.name}`}));
@@ -10324,7 +10334,7 @@ if(!campDraft) return;
 const isEditing = !!campDraft.id;
 const campId = campDraft.id || mkId();
 const existingCamp = isEditing ? campaigns.find(c=>c.id===campId) : null;
-const camp = {
+const camp = scrubCampFields({
 ...(existingCamp||{}),
 id: campId,
 name: campDraft.name||"Untitled Campaign",
@@ -10337,12 +10347,8 @@ startDate: campDraft.startDate||"",
 endDate: campDraft.endDate||"",
 touches: campDraft.touches||[],
 enrollments: existingCamp?.enrollments||[],
-socialPosts: existingCamp?.socialPosts||[],
-socialDrafts: campDraft.socialDrafts||[],
-adCopy: campDraft.adCopy||"",
 callScript: campDraft.callScript||"",
 directMail: campDraft.directMail||"",
-adIds: existingCamp?.adIds||[],
 channels: campDraft.channels||[],
 assetTypes: campDraft.assetTypes||[],
 icp: campDraft.icp||{sports:[],titles:[],schoolLevel:"Both",states:[],buyingSeasonNotes:"",notes:""},
@@ -10356,7 +10362,7 @@ status: "draft",
 _draftStep: campStep,
 createdAt: existingCamp?.createdAt||today(),
 color: existingCamp?.color||CAMP_COLORS[campaigns.length % CAMP_COLORS.length],
-};
+});
 if(isEditing) dispatch("UPDATE_CAMPAIGN", camp);
 else dispatch("ADD_CAMPAIGN", camp);
 setCampDraft(d=>({...d, id: campId}));
@@ -10666,7 +10672,7 @@ const sc=CAMP_STATUS_COLORS[camp.status]||B.muted;
 return(
 <div key={camp.id} onClick={()=>{
 if(camp.status==="draft"&&camp._draftStep){
-setCampDraft({...camp});
+setCampDraft(scrubCampFields({...camp}));
 setCampStep(camp._draftStep||1);
 setShowNewCampForm(true);
 setShowTemplateSelect(false);
@@ -10923,8 +10929,7 @@ style={{background:on?`${B.orange}12`:B.surface,color:on?B.orange:B.text,border:
 </div>
 )}
 {(()=>{
-const types=campDraft.assetTypes||[];
-const hasContent=(campDraft.touches||[]).length>0||(campDraft.adCopy||"").trim()||(campDraft.callScript||"").trim()||(campDraft.directMail||"").trim()||(campDraft.socialDrafts||[]).length>0;
+const hasContent=(campDraft.touches||[]).length>0||(campDraft.callScript||"").trim()||(campDraft.directMail||"").trim();
 const canProceed=hasContent;
 return(
 <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
@@ -11158,7 +11163,7 @@ style={{background:B.surface,border:`1px solid ${B.border}`,borderRadius:4,paddi
 <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.orange,letterSpacing:.5,marginBottom:2}}>READY TO LAUNCH</div>
 <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>This campaign has {(selCamp.touches||[]).length} emails ready. Enroll contacts and activate it.</div>
 </div>
-<OBtn onClick={()=>{setCampDraft({...selCamp});setShowNewCampForm(true);setCampStep(5);setSelCampId(null);}}>🚀 ENROLL & LAUNCH</OBtn>
+<OBtn onClick={()=>{setCampDraft(scrubCampFields({...selCamp}));setShowNewCampForm(true);setCampStep(5);setSelCampId(null);}}>🚀 ENROLL & LAUNCH</OBtn>
 </div>
 )}
 {/* Plan link */}
@@ -13368,7 +13373,7 @@ return (
 </div>
 );
 }
-function BrandAssetAddForm({dispatch,toast,s}) {
+function BrandAssetAddForm({dispatch,toast}) {
 const [form,setForm]=useState({name:"",url:"",type:"logo"});
 const handleAdd=()=>{
 if(!form.name||!form.url){toast("Name and URL required","error");return;}
@@ -14221,7 +14226,7 @@ return(
 )}
 {(s.brandAssets||[]).length===0&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,padding:"8px 0 12px",textAlign:"center"}}>No brand assets yet — add logos, product photos, and banners below</div>}
 {/* ADD ASSET form */}
-<BrandAssetAddForm dispatch={dispatch} toast={toast} s={s}/>
+<BrandAssetAddForm dispatch={dispatch} toast={toast}/>
 </div>
 <div className="card" style={{padding:16,borderTop:`3px solid ${B.green}`}}>
 <Lbl c={B.green} s={{marginBottom:11}}>Data Management</Lbl>

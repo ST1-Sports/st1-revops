@@ -20,7 +20,7 @@ const B = {
   redBg:    '#FDECEA',
 }
 
-const TYPE_LABELS = { claude: 'Claude AI', 'claude-search': 'Claude + Search', ideogram: 'Ideogram AI', agent: 'ST1 Agent', webhook: 'Webhook', api: 'API', embed: 'Embed', iframe: 'iFrame' }
+const TYPE_LABELS = { claude: 'Claude AI', 'claude-search': 'Claude + Search', agent: 'ST1 Agent', webhook: 'Webhook', api: 'API', embed: 'Embed', iframe: 'iFrame' }
 
 function pluginStatus(p) {
   if (p.custom) {

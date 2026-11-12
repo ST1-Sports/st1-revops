@@ -1,6 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react'
 import { routeTask } from '../lib/aiRouter.js'
-import ToolManagerComponent from '../components/ToolManager.jsx'
 import AnalyticsWidget from '../components/AnalyticsWidget.jsx'
 
 // ─── BRAND ────────────────────────────────────────────────────────────────────
@@ -24,6 +23,8 @@ const B = {
 }
 
 // ─── HELPERS ──────────────────────────────────────────────────────────────────
+const fmt$ = n => '$' + Number(n || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+
 function getStoredRole() {
   try {
     const raw = localStorage.getItem('st1_revops_v2')
@@ -755,16 +756,6 @@ function FinancialModule({ userRole }) {
   )
 }
 
-// ─── MODULE 7: TOOL MANAGER (admin) ──────────────────────────────────────────
-function ToolManagerModule() {
-  return (
-    <div>
-      <ModHeader icon="⚙" label="Tool Manager" desc="Configure plugins, manage API keys, and control which tools each role can access." />
-      <ToolManagerComponent />
-    </div>
-  )
-}
-
 // ─── PRICE LIST INTEL ────────────────────────────────────────────────────────
 const COMPETITOR_LIST = [
   'BSN Sports', 'Varsity Brands', 'School Specialty', 'Epic Sports',
@@ -890,7 +881,6 @@ function ActivePanel({ mod, userRole }) {
   if (mod.id === 'research')     return <ResearchModule     userRole={userRole} />
   if (mod.id === 'finance')      return <FinancialModule    userRole={userRole} />
   if (mod.id === 'analytics')    return <AnalyticsWidget />
-  if (mod.id === 'tool-manager') return <ToolManagerModule />
   return <PlaceholderPanel mod={mod} />
 }
 

@@ -34,6 +34,8 @@ model Product {
   assets            Asset[]
 }
 
+// Leftover ad-creative rows from the removed Ad Engine. Keep the table so
+// `prisma db push --accept-data-loss` on deploy cannot drop historical files.
 model Asset {
   id          String   @id @default(cuid())
   productId   String?
@@ -402,7 +404,8 @@ model EmailOpen {
   @@index([contactId])
 }
 
-// ── AD HUB ────────────────────────────────────────────────────────────────────
+// Leftover from the removed Ad Hub. Keep the table so deploy `db push
+// --accept-data-loss` cannot drop historical attribution rows.
 
 model ad_attribution {
   id                   String   @id @default(uuid())
@@ -441,6 +444,8 @@ model utm_links {
   @@index([utm_campaign])
   @@map("utm_links")
 }
+
+// Leftover Ad Hub alert config. Same as ad_attribution: do not drop.
 
 model alert_rules {
   id           String         @id @default(uuid())
