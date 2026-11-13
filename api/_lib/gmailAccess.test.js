@@ -19,3 +19,17 @@ describe('/api/gmail mailbox access', () => {
     assert.equal(gmailKeyAllowed({ ...rep, isAdmin: true }, 'REP_R2'), true);
   });
 });
+
+describe('/api/gmail BDR mailboxes', () => {
+  const matt = { repId: 'm1', isAdmin: false, gmailEnvKey: 'REP_M1' };
+  const josh = { repId: 'j1', isAdmin: false, gmailEnvKey: 'REP_J1' };
+  const assignments = { m1: { name: 'Brad Hofer', email: 'brad@shopst1sports.com', gmailKey: 'BRAD' } };
+  it('a claimed BDR mailbox is only its owner’s (and admins’)', () => {
+    assert.equal(gmailKeyAllowed(matt, 'BRAD', assignments), true);
+    assert.equal(gmailKeyAllowed(josh, 'BRAD', assignments), false);
+    assert.equal(gmailKeyAllowed({ ...josh, isAdmin: true }, 'BRAD', assignments), true);
+  });
+  it('unclaimed Brad stays shared, as before', () => {
+    assert.equal(gmailKeyAllowed(josh, 'BRAD', {}), true);
+  });
+});

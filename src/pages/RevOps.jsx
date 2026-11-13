@@ -72,6 +72,7 @@ const FlagshipStorePage = lazy(() => import('./FlagshipStore.jsx'))
 const BulkOutreachPage = lazy(() => import('./BulkOutreach.jsx'))
 const FollowUpRadarPage = lazy(() => import('./FollowUpRadar.jsx'))
 const RadarInboxCard = lazy(() => import('./RadarInboxCard.jsx'))
+const MyBdrCard = lazy(() => import('./MyBdrCard.jsx'))
 const TeamStoreStatementPage = lazy(() => import('./TeamStoreStatement.jsx'))
 const TeamStoreReconcilePage = lazy(() => import('./TeamStoreReconcile.jsx'))
 function usePrefetchPanels() {
@@ -10440,10 +10441,11 @@ contactName:c.fullName||`${c.firstName||""} ${c.lastName||""}`.trim(),
 subject,
 body:plainBody,
 contactId:c.id,
+...(camp.bdrRepId?{bdrRepId:camp.bdrRepId}:{}),
 })});
 const d=await r.json();
 if(d.sent) return {ok:true};
-return {ok:false,reason:d.error||"Brad send failed"};
+return {ok:false,reason:d.error||"BDR send failed"};
 }
 const r=await fetch("/api/gmail",{method:"POST",headers:{"Content-Type":"application/json"},
 body:JSON.stringify({
@@ -10454,7 +10456,7 @@ subject,
 body:plainBody,
 htmlBody,
 ...(useBrad
-? {from_name:"Brad Hofer", from_email:"brad@shopst1sports.com", reply_to:"brad@shopst1sports.com", repEnvKey:"BRAD"}
+? {asBdr:true, ...(camp.bdrRepId?{bdrRepId:camp.bdrRepId}:{})}
 : {...(rep?.gmailEnvKey ? {repEnvKey:rep.gmailEnvKey} : {}), ...(rep?.email ? {reply_to:rep.email, from_name:rep.name} : {})}),
 ...(touch.isQuote && co.quoteTrackEmail ? {bcc:co.quoteTrackEmail} : {}),
 })});
@@ -13623,6 +13625,7 @@ No Gmail key assigned to your account. Ask an admin to set your Gmail Key in Set
 )}
 </div>
 <Suspense fallback={null}><RadarInboxCard userId={cu?.id||s.currentUserId} isAdmin={false}/></Suspense>
+<Suspense fallback={null}><MyBdrCard isAdmin={false}/></Suspense>
 </div>
 );
 }
@@ -13647,6 +13650,7 @@ style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B
 <OBtn onClick={save}>SAVE SETTINGS</OBtn>
 </div>
 <Suspense fallback={null}><RadarInboxCard userId={cu?.id||s.currentUserId} isAdmin={!!cu?.isAdmin}/></Suspense>
+<Suspense fallback={null}><MyBdrCard isAdmin={!!cu?.isAdmin}/></Suspense>
 {/* BCC-to-Deal Email Tracking */}
 <div className="card" style={{padding:16,marginBottom:13,borderTop:`3px solid ${B.blue}`}}>
 <Lbl c={B.blue} s={{marginBottom:6}}>BCC-to-Deal Tracking</Lbl>

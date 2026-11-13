@@ -23,6 +23,7 @@ import { prisma } from '../_lib/prisma.js';
 import { requireInternalSecret } from '../_lib/internalAuth.js';
 import { getGmailAccessToken } from '../_lib/gmailAuth.js';
 import { updateSettingSafely } from '../_lib/settingSync.js';
+import { bdrForCampaign, loadAssignments } from '../_lib/bdr.js';
 
 const MAX_DURATION_MS = 110_000; // keep under this file's 120s maxDuration (vercel.json)
 const CONCURRENCY = 8;
@@ -85,7 +86,8 @@ export default async function handler(req, res) {
 
     let token;
     try {
-      token = await getGmailAccessToken(camp.fromBrad ? 'BRAD' : (rep?.gmailEnvKey || ''));
+      const bdrKey = camp.fromBrad ? bdrForCampaign(await loadAssignments(), camp).gmailKey : '';
+      token = await getGmailAccessToken(camp.fromBrad ? bdrKey : (rep?.gmailEnvKey || ''));
     } catch (e) {
       return res.status(500).json({ error: `Gmail auth: ${e.message}` });
     }

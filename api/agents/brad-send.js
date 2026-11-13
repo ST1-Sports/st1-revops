@@ -1,11 +1,12 @@
 /**
  * POST /api/agents/brad-send
  *
- * Send an approved Brad draft via Gmail and log the outcome to
+ * Send an approved BDR draft via Gmail, from the signed-in rep's own BDR
+ * (Settings → My BDR), and log the outcome to
  * agentInteraction so the 14-day re-touch barrier and outcome
  * tracking both reflect actual sends, not just draft generation.
  *
- * Body: { contactEmail, contactName, subject, body, contactId? }
+ * Body: { contactEmail, contactName, subject, body, contactId?, batchId?, bdrRepId? (admins) }
  */
 
 import { setCors }        from '../_lib/cors.js'
@@ -14,6 +15,7 @@ import { callGmailInternal } from '../gmail.js'
 import { logInteraction } from '../_lib/memory.js'
 import { loadAllOutreachBatches } from '../_lib/outreachLoad.js'
 import { claimForEmail, stoppedLeadForEmail } from '../_lib/outreachSent.js'
+import { loadBdrForRep } from '../_lib/bdr.js'
 
 export const config = { api: { bodyParser: { sizeLimit: '50kb' } } }
 
@@ -21,18 +23,24 @@ export default async function handler(req, res) {
   setCors(res, 'POST, OPTIONS')
   if (req.method === 'OPTIONS') return res.status(200).end()
   if (req.method !== 'POST')   return res.status(405).json({ error: 'POST only' })
-  // Sends as Brad: signed-in reps only.
-  if (!(await requireRep(req, res))) return
+  // Sends as the signed-in rep's own BDR.
+  const me = await requireRep(req, res)
+  if (!me) return
 
-  const { contactEmail, contactName, subject, body, contactId, batchId } = req.body || {}
+  const { contactEmail, contactName, subject, body, contactId, batchId, bdrRepId } = req.body || {}
   if (!contactEmail) return res.status(400).json({ error: 'contactEmail required' })
   if (!body)         return res.status(400).json({ error: 'body required' })
   if (process.env.BRAD_SENDING_ENABLED !== 'true') {
     return res.status(403).json({
       ok: false,
       sent: false,
-      error: 'Brad sending is disabled. Set BRAD_SENDING_ENABLED=true to allow approved sends.',
+      error: 'BDR sending is disabled. Set BRAD_SENDING_ENABLED=true to allow approved sends.',
     })
+  }
+  // Admins may send a campaign from the BDR of the rep who owns it; everyone else uses their own.
+  const bdr = await loadBdrForRep(bdrRepId && me.isAdmin ? String(bdrRepId) : me.repId)
+  if (!bdr) {
+    return res.status(400).json({ ok: false, sent: false, error: 'Set up your BDR first: Settings → My BDR.' })
   }
 
 
@@ -67,10 +75,10 @@ export default async function handler(req, res) {
         to_name:    contactName,
         subject,
         body,
-        from_name:  'Brad Hofer',
-        from_email: 'brad@shopst1sports.com',
-        reply_to:   'brad@shopst1sports.com',
-        repEnvKey:  'BRAD',
+        from_name:  bdr.name,
+        from_email: bdr.email,
+        reply_to:   bdr.email,
+        repEnvKey:  bdr.gmailKey,
     })
     if (!gmailData.sent) {
       return res.status(500).json({ ok: false, error: gmailData.error || 'Gmail send failed' })
@@ -82,7 +90,7 @@ export default async function handler(req, res) {
       action:  'outreach',
       entity:  contactId ? `contact:${contactId}` : null,
       input:   { contactEmail, subject },
-      output:  { via: 'gmail' },
+      output:  { via: 'gmail', bdr: bdr.email, repId: me.repId },
       outcome: 'sent',
       dryRun:  false,
     }).catch(() => {})

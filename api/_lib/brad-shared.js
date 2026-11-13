@@ -72,8 +72,9 @@ function bradSlackChannels() {
   ].filter(Boolean))]
 }
 
-export async function notifyBradSlack(assigned, contactName, fromEmail, subject, bodyText) {
-  const text = `🔥 *Brad got a positive reply — assigned to ${assigned.name}*\n*From:* ${contactName} (${fromEmail})\n*Subject:* ${subject}\n\n_"${(bodyText || '').slice(0, 200)}${(bodyText || '').length > 200 ? '…' : ''}"_`
+export async function notifyBradSlack(assigned, contactName, fromEmail, subject, bodyText, bdrName = 'Brad') {
+  const who = String(bdrName || 'Brad').trim().split(/\s+/)[0] || 'Brad'
+  const text = `🔥 *${who} got a positive reply — assigned to ${assigned.name}*\n*From:* ${contactName} (${fromEmail})\n*Subject:* ${subject}\n\n_"${(bodyText || '').slice(0, 200)}${(bodyText || '').length > 200 ? '…' : ''}"_`
   const result = await sendSlackText({ channels: bradSlackChannels(), text })
   if (!result.ok) console.warn('[brad] slack notify failed:', result.error)
   return result
