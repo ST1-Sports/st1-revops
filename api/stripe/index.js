@@ -12,6 +12,7 @@
  */
 
 import { setCors } from '../_lib/cors.js';
+import { requireSignedIn } from '../_lib/requireSignedIn.js'
 
 const STRIPE_BASE = 'https://api.stripe.com/v1';
 
@@ -106,6 +107,7 @@ function tsRange(days) {
 export default async function handler(req, res) {
   setCors(res);
   if (req.method === 'OPTIONS') return res.status(200).end();
+  if (!(await requireSignedIn(req, res))) return
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
 
   const { action = 'status', days = 30, limit = 20 } = req.body || {};

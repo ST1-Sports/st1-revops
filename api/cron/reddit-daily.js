@@ -17,19 +17,14 @@ const { ingestThreads }         = require('../reddit/services/ingestion');
 const { evaluateThread }        = require('../reddit/services/evaluator');
 const { generateReplies }       = require('../reddit/services/reply-generator');
 const { getPrisma }             = require('../reddit/services/_prisma');
+import { requireCronSecret } from '../_lib/requireSignedIn.js';
 
 function sleep(ms) {
   return new Promise(r => setTimeout(r, ms));
 }
 
 export default async function handler(req, res) {
-  const cronSecret = process.env.CRON_SECRET;
-  if (cronSecret) {
-    const authHeader = req.headers['authorization'] || '';
-    if (authHeader !== `Bearer ${cronSecret}`) {
-      return res.status(401).json({ error: 'Unauthorized' });
-    }
-  }
+  if (!requireCronSecret(req, res)) return;
 
   if (req.method !== 'GET' && req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' });

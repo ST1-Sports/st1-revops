@@ -15,6 +15,7 @@
 import { setCors } from '../_lib/cors.js'
 import { shopifyRequest, shopifyConfigured } from '../_lib/shopify.js'
 import { klaviyoConfigured, findMetricId, metricCount, listMetricEvents } from '../_lib/klaviyo.js'
+import { requireSignedIn } from '../_lib/requireSignedIn.js'
 
 let _ga4Token = null, _ga4Expiry = 0
 function ga4Creds() {
@@ -146,6 +147,7 @@ async function loadKlaviyo(sinceISO, untilISO) {
 export default async function handler(req, res) {
   setCors(res, 'GET, OPTIONS')
   if (req.method === 'OPTIONS') return res.status(200).end()
+  if (!(await requireSignedIn(req, res))) return
   if (req.method !== 'GET')    return res.status(405).json({ error: 'GET only' })
 
   const days = Math.min(Math.max(Number(req.query?.days) || 30, 1), 365)

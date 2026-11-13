@@ -19,6 +19,7 @@ import { findOrCreateZohoAccount } from '../_lib/zohoAccount.js'
 import { findOrCreateZohoContact } from '../_lib/zohoContact.js'
 import { createZohoDeal, isScopeError } from '../_lib/zohoDeal.js'
 import { CRM_BASE, zohoCrmHeaders, zohoCrmCreateRecord, zohoRecordId, zohoRecordError } from '../_lib/zohoCrm.js'
+import { requireSignedIn } from '../_lib/requireSignedIn.js'
 
 export const config = { api: { bodyParser: { sizeLimit: '2mb' } } }
 
@@ -31,6 +32,7 @@ function localQuoteNumber(dateStr) {
 export default async function handler(req, res) {
   setCors(res, 'POST, OPTIONS')
   if (req.method === 'OPTIONS') return res.status(200).end()
+  if (!(await requireSignedIn(req, res))) return
   if (req.method !== 'GET' && req.method !== 'POST') return res.status(405).json({ error: 'GET or POST only' })
 
   if (req.method === 'GET') {

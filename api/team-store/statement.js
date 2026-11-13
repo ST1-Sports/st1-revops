@@ -20,6 +20,7 @@
 import { prisma } from '../_lib/prisma.js';
 import { setCors } from '../_lib/cors.js';
 import { buildStatement, statementForPayee, monthBoundsFromKey } from '../../src/lib/teamStoreSettlement.js';
+import { requireSignedIn } from '../_lib/requireSignedIn.js'
 
 async function currentConfig(monthEnd) {
   // monthEnd is the exclusive boundary (start of the NEXT month) — a config whose
@@ -37,6 +38,7 @@ async function currentConfig(monthEnd) {
 export default async function handler(req, res) {
   setCors(res, 'GET, OPTIONS');
   if (req.method === 'OPTIONS') return res.status(200).end();
+  if (!(await requireSignedIn(req, res))) return
 
   try {
     if (req.method !== 'GET') return res.status(405).json({ error: 'Method not allowed' });

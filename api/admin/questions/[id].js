@@ -7,10 +7,12 @@
 
 import { prisma } from '../../_lib/prisma.js';
 import { setCors } from '../../_lib/cors.js';
+import { requireSignedIn } from '../../_lib/requireSignedIn.js'
 
 export default async function handler(req, res) {
   setCors(res, 'PATCH, DELETE, OPTIONS');
   if (req.method === 'OPTIONS') return res.status(200).end();
+  if (!(await requireSignedIn(req, res, { adminOnly: true }))) return
 
   const { id } = req.query;
   if (!id) return res.status(400).json({ error: 'id is required' });

@@ -29,6 +29,7 @@ import { getZohoToken } from '../_lib/zoho-token.js'
 import { upsertAccountForContact } from '../_lib/accountUtils.js'
 import { findOrCreateZohoAccount } from '../_lib/zohoAccount.js'
 import { upsertZohoRecord as zohoUpsert, INTENT_SCORE_THRESHOLD } from '../_lib/zohoCrm.js'
+import { requireSignedIn } from '../_lib/requireSignedIn.js'
 
 async function findOrCreateAccount(contact, headers) {
   const name = (contact.companyName || '').trim()
@@ -66,6 +67,7 @@ async function upsertRecord({ module, payload, contact, headers, extraContactUpd
 export default async function handler(req, res) {
   setCors(res)
   if (req.method === 'OPTIONS') return res.status(200).end()
+  if (!(await requireSignedIn(req, res))) return
   if (req.method !== 'POST')   return res.status(405).json({ error: 'POST only' })
 
   const { contactId, createAsContact } = req.body || {}

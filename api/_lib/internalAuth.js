@@ -1,17 +1,13 @@
 /**
- * Minimal shared-secret gate for the highest-risk internal endpoints — mass
- * deletes, direct invoice/vendor-bill creation, the raw Zoho/Shopify proxies,
- * and ad-spend mutations. This app has no real per-user auth yet; this is not
- * that — it's a static shared secret, same trust model as the existing
- * Zoho/Twilio webhook secrets, meant to stop a stray/scanning request or an
- * unrelated site from blindly hitting these routes, not a determined
- * attacker who has the deployed JS bundle.
+ * Extra shared-secret layer for the highest-risk internal endpoints — mass
+ * deletes, direct invoice/vendor-bill creation, the raw Zoho/Shopify proxies.
+ * Sign-in (requireSignedIn / requireCaller) is the real gate on those routes;
+ * this is a static secret on top, same idea as the Zoho/Twilio webhook secrets.
  *
- * Fails OPEN when INTERNAL_SECRET isn't configured, so shipping this code
- * doesn't break the live app before the env var exists. To actually turn the
- * gate on: set INTERNAL_SECRET (server) and VITE_INTERNAL_SECRET (same
- * value, baked into the frontend build at build time) in Vercel, then
- * redeploy.
+ * Fails OPEN when INTERNAL_SECRET isn't configured, so a missing env var does
+ * not lock signed-in reps out. To turn the extra gate on: set INTERNAL_SECRET
+ * (server) and VITE_INTERNAL_SECRET (same value, baked into the frontend build)
+ * in Vercel, then redeploy.
  */
 import { timingSafeEqual } from 'crypto'
 

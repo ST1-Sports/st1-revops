@@ -16,14 +16,16 @@
 
 import { getZohoToken as getAccessToken } from './_lib/zoho-token.js';
 import { requireInternalSecret } from './_lib/internalAuth.js';
+import { requireSignedIn } from './_lib/requireSignedIn.js'
 
 export default async function handler(req, res) {
   // CORS headers for local dev
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
-  res.setHeader("Access-Control-Allow-Headers", "Content-Type, x-internal-secret");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, x-internal-secret");
 
   if (req.method === "OPTIONS") return res.status(200).end();
+  if (!(await requireSignedIn(req, res))) return
   if (req.method !== "POST") return res.status(405).json({ error: "POST only" });
   if (!requireInternalSecret(req, res)) return;
 

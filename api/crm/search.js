@@ -12,6 +12,7 @@ import { getZohoToken } from '../_lib/zoho-token.js';
 import { setCors }       from '../_lib/cors.js';
 import { CRM_BASE }      from '../_lib/zohoCrm.js';
 import { zohoCriteriaValue } from '../_lib/zohoAccount.js';
+import { requireSignedIn } from '../_lib/requireSignedIn.js'
 
 async function zohoSearch(token, module, field, value) {
   const criteria = encodeURIComponent(`(${field}:contains:${zohoCriteriaValue(value)})`);
@@ -52,6 +53,7 @@ function mapLead(r) {
 export default async function handler(req, res) {
   setCors(res, 'GET, OPTIONS');
   if (req.method === 'OPTIONS') return res.status(200).end();
+  if (!(await requireSignedIn(req, res))) return
   if (req.method !== 'GET')     return res.status(405).json({ error: 'GET only' });
 
   const q = (req.query.q || '').trim();

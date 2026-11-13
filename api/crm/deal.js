@@ -18,10 +18,12 @@ import { setCors }      from '../_lib/cors.js'
 import { findOrCreateZohoAccount } from '../_lib/zohoAccount.js'
 import { zohoCrmHeaders, zohoCrmDeleteRecords, zohoRecordError } from '../_lib/zohoCrm.js'
 import { createZohoDeal } from '../_lib/zohoDeal.js'
+import { requireSignedIn } from '../_lib/requireSignedIn.js'
 
 export default async function handler(req, res) {
   setCors(res, 'POST, DELETE, OPTIONS')
   if (req.method === 'OPTIONS') return res.status(200).end()
+  if (!(await requireSignedIn(req, res))) return
   if (req.method !== 'POST' && req.method !== 'DELETE') return res.status(405).json({ error: 'POST or DELETE only' })
 
   if (req.method === 'DELETE') {

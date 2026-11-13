@@ -14,6 +14,7 @@ import { prisma } from '../_lib/prisma.js';
 import { setCors } from '../_lib/cors.js';
 import { applyFirstUploadHolds, claimedEmails, effectiveBatchStatus, promoteStatus, sentRowsFromBatches, sentTouchCount, uniqueSentByEmail } from '../_lib/outreachSent.js';
 import { saveOutreachBatchLeads } from '../_lib/outreachLoad.js';
+import { requireSignedIn } from '../_lib/requireSignedIn.js'
 
 export const config = { api: { bodyParser: { sizeLimit: '6mb' } } };
 
@@ -120,6 +121,7 @@ async function fallbackDelete(id) {
 export default async function handler(req, res) {
   setCors(res, 'GET, POST, PATCH, DELETE, OPTIONS');
   if (req.method === 'OPTIONS') return res.status(200).end();
+  if (!(await requireSignedIn(req, res))) return
 
   try {
     if (req.method === 'GET') {

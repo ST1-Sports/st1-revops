@@ -28,6 +28,7 @@ import { prisma } from '../_lib/prisma.js';
 import { callGmailInternal } from '../gmail.js';
 import { loadAllOutreachBatches } from '../_lib/outreachLoad.js';
 import { claimedEmails, emailKey, leadStoppedAuto } from '../_lib/outreachSent.js';
+import { requireCronSecret } from '../_lib/requireSignedIn.js';
 
 
 const SEND_PAUSE_MS   = 30_000;  // 30s between emails
@@ -94,17 +95,11 @@ async function saveState(state) {
 }
 
 export default async function handler(req, res) {
+  if (!requireCronSecret(req, res)) return;
+
   // Env-level kill switch — set PAUSE_EMAIL_SENDING=true in Vercel env to halt all sends immediately.
   if (process.env.PAUSE_EMAIL_SENDING === 'true') {
     return res.json({ ok: true, paused: true, batchesFired: 0, emailsSent: 0 });
-  }
-
-  const cronSecret = process.env.CRON_SECRET;
-  if (cronSecret) {
-    const authHeader = req.headers["authorization"] || "";
-    if (authHeader !== `Bearer ${cronSecret}`) {
-      return res.status(401).json({ error: "Unauthorized" });
-    }
   }
 
   if (req.method !== "GET" && req.method !== "POST") {

@@ -7,6 +7,7 @@
  */
 import { setCors } from '../_lib/cors.js'
 import { normalizeExtractedQuote, parseJsonObject } from '../_lib/quotePdfImport.js'
+import { requireSignedIn } from '../_lib/requireSignedIn.js'
 
 export const config = {
   api: { bodyParser: { sizeLimit: '8mb' } },
@@ -18,6 +19,7 @@ const ANTHROPIC_KEY = process.env.ANTHROPIC_KEY
 export default async function handler(req, res) {
   setCors(res, 'POST, OPTIONS')
   if (req.method === 'OPTIONS') return res.status(200).end()
+  if (!(await requireSignedIn(req, res))) return
   if (req.method !== 'POST') return res.status(405).json({ error: 'POST only' })
 
   const { pdfBase64, pdfName } = req.body || {}

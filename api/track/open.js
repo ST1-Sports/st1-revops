@@ -9,6 +9,7 @@
  */
 
 import { prisma } from "../_lib/prisma.js";
+import { requireSignedIn } from "../_lib/requireSignedIn.js";
 
 // 1×1 transparent GIF (35 bytes)
 const PIXEL = Buffer.from(
@@ -19,8 +20,9 @@ const PIXEL = Buffer.from(
 export default async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
 
-  // ── LIST: return opens for a sequence ───────────────────────────────────────
+  // ── LIST: return opens for a sequence (signed-in reps only) ────────────────
   if (req.query.list) {
+    if (!(await requireSignedIn(req, res))) return;
     const { seqId } = req.query;
     if (!seqId) return res.status(400).json({ error: "seqId required" });
     try {

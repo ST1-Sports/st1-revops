@@ -30,6 +30,7 @@ import { CRM_BASE, zohoCrmHeaders } from '../_lib/zohoCrm.js';
 import { updateSettingSafely } from '../_lib/settingSync.js';
 import { dealIsSuppressed } from '../../src/lib/dealTombstone.js';
 import { filledQuoteLines, quoteFieldsFromZohoRecord } from '../../src/lib/quoteLines.js';
+import { requireCronSecret } from '../_lib/requireSignedIn.js';
 
 const DEAL_FIELDS = 'Deal_Name,Amount,Stage,Closing_Date,Account_Name,Contact_Name,Description,Modified_Time,Created_Time';
 const DEAL_STAGES = ['Quoted', 'Follow-Up 1', 'Follow-Up 2', 'Negotiating', 'PO Received', 'Closed Won', 'Closed Lost', 'On Hold'];
@@ -73,13 +74,7 @@ async function fetchDealsSince(token, sinceMs) {
 }
 
 export default async function handler(req, res) {
-  const cronSecret = process.env.CRON_SECRET;
-  if (cronSecret) {
-    const authHeader = req.headers['authorization'] || '';
-    if (authHeader !== `Bearer ${cronSecret}`) {
-      return res.status(401).json({ error: 'Unauthorized' });
-    }
-  }
+  if (!requireCronSecret(req, res)) return;
   if (req.method !== 'GET' && req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' });
   }

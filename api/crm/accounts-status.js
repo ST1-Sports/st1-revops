@@ -24,6 +24,7 @@ import { prisma }       from '../_lib/prisma.js'
 import { getZohoToken } from '../_lib/zoho-token.js'
 import { zohoCrmHeaders, CRM_BASE } from '../_lib/zohoCrm.js'
 import { normalizeAccountName } from '../_lib/accountUtils.js'
+import { requireSignedIn } from '../_lib/requireSignedIn.js'
 
 async function fetchAllAccounts(headers) {
   let all = [], page = 1
@@ -42,6 +43,7 @@ async function fetchAllAccounts(headers) {
 export default async function handler(req, res) {
   setCors(res)
   if (req.method === 'OPTIONS') return res.status(200).end()
+  if (!(await requireSignedIn(req, res))) return
   if (req.method !== 'GET')    return res.status(405).json({ error: 'GET only' })
 
   const sinceHours = Math.min(Math.max(Number(req.query?.sinceHours) || 168, 1), 24 * 90)

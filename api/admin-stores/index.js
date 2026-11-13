@@ -8,6 +8,7 @@
 
 import { setCors } from '../_lib/cors.js';
 import { poolMap } from '../_lib/teamStoreSync.js';
+import { requireSignedIn } from '../_lib/requireSignedIn.js'
 
 const DETAIL_CONCURRENCY = 5; // same cap as teamStoreSync.js — unpooled detail calls outrun the admin-app token
 
@@ -150,6 +151,7 @@ function extractList(data, ...keys) {
 export default async function handler(req, res) {
   setCors(res);
   if (req.method === 'OPTIONS') return res.status(200).end();
+  if (!(await requireSignedIn(req, res))) return
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
   const { action = 'status' } = req.body || {};
 

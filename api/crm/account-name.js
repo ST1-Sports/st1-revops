@@ -13,10 +13,12 @@ import { setCors }      from '../_lib/cors.js'
 import { findOrCreateZohoAccount } from '../_lib/zohoAccount.js'
 import { zohoCrmHeaders } from '../_lib/zohoCrm.js'
 import { requireInternalSecret } from '../_lib/internalAuth.js'
+import { requireSignedIn } from '../_lib/requireSignedIn.js'
 
 export default async function handler(req, res) {
   setCors(res, 'POST, OPTIONS')
   if (req.method === 'OPTIONS') return res.status(200).end()
+  if (!(await requireSignedIn(req, res))) return
   if (req.method !== 'POST')   return res.status(400).json({ error: 'POST only' })
   // Writes to the live Zoho CRM: same shared-secret gate as the other Zoho write routes.
   if (!requireInternalSecret(req, res)) return

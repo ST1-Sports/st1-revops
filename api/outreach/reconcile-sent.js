@@ -23,6 +23,7 @@ import { prisma } from '../_lib/prisma.js';
 import { requireInternalSecret } from '../_lib/internalAuth.js';
 import { getGmailAccessToken } from '../_lib/gmailAuth.js';
 import { updateSettingSafely } from '../_lib/settingSync.js';
+import { requireSignedIn } from '../_lib/requireSignedIn.js'
 
 const MAX_DURATION_MS = 110_000; // keep under this file's 120s maxDuration (vercel.json)
 const CONCURRENCY = 8;
@@ -60,6 +61,7 @@ async function findSentMatch(token, email, sinceDate) {
 export default async function handler(req, res) {
   setCors(res, 'POST, OPTIONS');
   if (req.method === 'OPTIONS') return res.status(200).end();
+  if (!(await requireSignedIn(req, res))) return
   if (req.method !== 'POST') return res.status(405).json({ error: 'POST only' });
   if (!requireInternalSecret(req, res)) return;
 

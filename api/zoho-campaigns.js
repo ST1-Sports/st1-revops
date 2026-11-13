@@ -22,12 +22,14 @@
 
 import { getZohoToken } from './_lib/zoho-token.js';
 import { setCors } from './_lib/cors.js';
+import { requireSignedIn } from './_lib/requireSignedIn.js'
 
 const BASE = "https://campaigns.zoho.com/api/v1.1";
 
 export default async function handler(req, res) {
   setCors(res, "POST, OPTIONS");
   if (req.method === "OPTIONS") return res.status(200).end();
+  if (!(await requireSignedIn(req, res))) return
   if (req.method !== "POST") return res.status(405).json({ error: "POST only" });
 
   const { action, ...params } = req.body || {};

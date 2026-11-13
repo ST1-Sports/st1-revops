@@ -5,10 +5,10 @@
  * a pricing/quote email, and this endpoint receives it and queues a deal.
  *
  * POST — receive inbound email (from SendGrid Inbound Parse, Mailgun, Cloudflare Email, etc.)
- *   Validates optional INBOUND_EMAIL_SECRET env var via `x-inbound-secret` header or ?secret= param.
+ *   Requires INBOUND_EMAIL_SECRET via `x-inbound-secret` or ?secret=.
  *
  * GET  — return unprocessed quotes so the React app can create deals
- *   Requires same secret if INBOUND_EMAIL_SECRET is set.
+ *   Signed-in session or the inbound secret.
  *
  * POST { ids: [...] } with header x-action: mark-processed — mark deals as consumed
  *
@@ -34,6 +34,7 @@ import { prisma } from './_lib/prisma.js';
 import { setCors } from './_lib/cors.js';
 import { classifyEmailIntent, pickRep, notifyBradSlack, parseAddr, promoteContactToZoho } from './_lib/brad-shared.js';
 import { handOffBradReply } from './_lib/radar/brad.js';
+import { requireSignedIn } from './_lib/requireSignedIn.js';
 
 // Classify a Brad reply; on positive intent, assign to a rep + promote to Zoho.
 // Runs fire-and-forget so the inbound webhook returns fast.
@@ -84,11 +85,17 @@ export const config = {
   api: { bodyParser: { sizeLimit: "4mb" } },
 };
 
-function checkSecret(req) {
+function inboundSecretOk(req) {
   const secret = process.env.INBOUND_EMAIL_SECRET;
-  if (!secret) return true; // no secret configured = open
+  if (!secret) return false;
   const provided = req.headers['x-inbound-secret'] || req.query?.secret;
   return provided === secret;
+}
+
+/** App poll / mark-processed: signed-in rep or the inbound secret. */
+async function requireAppOrInboundSecret(req, res) {
+  if (inboundSecretOk(req)) return true;
+  return !!(await requireSignedIn(req, res));
 }
 
 
@@ -98,7 +105,7 @@ export default async function handler(req, res) {
 
   // ── GET: React app polls for pending quotes ────────────────────────────────
   if (req.method === "GET") {
-    if (!checkSecret(req)) return res.status(401).json({ error: "unauthorized" });
+    if (!(await requireAppOrInboundSecret(req, res))) return;
     try {
       const quotes = await prisma.inboundQuote.findMany({
         where: { processed: false },
@@ -113,7 +120,7 @@ export default async function handler(req, res) {
 
   // ── POST: mark quotes as processed ────────────────────────────────────────
   if (req.method === "POST" && req.headers["x-action"] === "mark-processed") {
-    if (!checkSecret(req)) return res.status(401).json({ error: "unauthorized" });
+    if (!(await requireAppOrInboundSecret(req, res))) return;
     const { ids } = req.body || {};
     if (!Array.isArray(ids) || !ids.length) return res.status(400).json({ error: "ids array required" });
     await prisma.inboundQuote.updateMany({
@@ -125,7 +132,10 @@ export default async function handler(req, res) {
 
   // ── POST: inbound email from SendGrid / Mailgun / Cloudflare ──────────────
   if (req.method === "POST") {
-    if (!checkSecret(req)) return res.status(401).json({ error: "unauthorized" });
+    if (!process.env.INBOUND_EMAIL_SECRET) {
+      return res.status(503).json({ error: "INBOUND_EMAIL_SECRET is not configured" });
+    }
+    if (!inboundSecretOk(req)) return res.status(401).json({ error: "unauthorized" });
 
     try {
       const body = req.body || {};
