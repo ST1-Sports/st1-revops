@@ -76,7 +76,13 @@ export default async function handler(req, res) {
             crmEmail:      email,
             dealAmount:    amount,
             dryRun:        false,
+            triggerSource: 'CRM_WEBHOOK',
           }),
+        }).then(async r => {
+          const d = await r.json().catch(() => ({}))
+          if (!r.ok || d.invoiceSyncFailed) {
+            console.error('[zoho webhook] invoice draft:', d.error || r.status)
+          }
         }).catch(e => console.error('[zoho webhook] invoice draft error:', e.message));
       }
     }

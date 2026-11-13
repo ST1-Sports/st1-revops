@@ -33,6 +33,16 @@ export default async function handler(req, res) {
     return res.status(400).json({ error: "Missing required fields: service, endpoint" });
   }
 
+  // Invoice creates must go through /api/agents/ledger/invoice (customer
+  // resolution + line mapping + quote-number idempotency). POST /invoices/{id}/...
+  // (email, etc.) is still allowed.
+  const booksPath = String(endpoint).split("?")[0].replace(/\/$/, "") || "/";
+  if (service === "books" && String(method).toUpperCase() === "POST" && booksPath === "/invoices") {
+    return res.status(400).json({
+      error: "Create invoices via /api/agents/ledger/invoice — raw Books invoice POST is blocked",
+    });
+  }
+
   // Validate env vars are configured
   if (!process.env.ZOHO_CLIENT_ID || !process.env.ZOHO_CLIENT_SECRET || !process.env.ZOHO_REFRESH_TOKEN) {
     return res.status(500).json({

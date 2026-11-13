@@ -669,17 +669,47 @@ const crmAddNote=(module,zohoId,content)=>zohoId?fetch("/api/zoho",{method:"POST
 const pushDealToZoho=(fields)=>fetch("/api/crm/deal",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(fields)}).then(r=>r.json()).catch(()=>({}));
 // Fires exactly once, on the transition into Closed Won — auto-drafts (not sends) an
 // invoice with the ledger agent so it's waiting for review in Finance the moment a deal closes.
-const autoInvoiceOnClosedWon=(deal,prevStage,newStage,toast)=>{
+const autoInvoiceOnClosedWon=(deal,prevStage,newStage,toast,dispatch)=>{
 if(newStage!=="Closed Won"||prevStage==="Closed Won")return;
+const lineItems=filledQuoteLines(deal?.quoteItems);
 fetch("/api/agents/ledger/invoice",{method:"POST",headers:{"Content-Type":"application/json",...internalAuthHeaders()},body:JSON.stringify({
 action:"draft",dryRun:false,
 crmDealId:deal.zohoId||undefined,
 crmDealName:deal.name,
 crmAccountName:deal.school,
 dealAmount:deal.value,
+quoteNumber:deal.quoteNumber||undefined,
+lineItems:lineItems.length?lineItems:undefined,
+zohoContactId:deal.booksContactId||undefined,
 })}).then(r=>r.json()).then(d=>{
-if(d?.zohoInvoiceId||d?.invoiceNumber) toast?.(`Invoice ${d.invoiceNumber||d.zohoInvoiceId} drafted for ${deal.name} — review in Finance`,"info");
-}).catch(()=>{});
+if(d?.invoiceSyncFailed||d?.error){
+dispatch?.("UPDATE_DEAL",{id:deal.id,invoiceSyncError:d.error});
+toast?.(d.error||"Invoice sync failed — customer not found","error");
+return;
+}
+if(d?.zohoInvoiceId||d?.invoiceNumber){
+dispatch?.("UPDATE_DEAL",{id:deal.id,zohoInvoiceId:d.zohoInvoiceId,invoiceNumber:d.invoiceNumber,invoiceSyncError:null});
+toast?.(`Invoice ${d.invoiceNumber||d.zohoInvoiceId} drafted for ${deal.name} — review in Finance`,"info");
+}
+}).catch(e=>{
+dispatch?.("UPDATE_DEAL",{id:deal.id,invoiceSyncError:e.message});
+toast?.(e.message||"Invoice sync failed","error");
+});
+};
+const createZohoInvoiceFromOrder=async(o)=>{
+const lineItems=(o.items||[]).map(item=>({name:item.name,description:item.description||"",qty:item.qty||1,rate:item.rate||0}));
+const r=await fetch("/api/agents/ledger/invoice",{method:"POST",headers:{"Content-Type":"application/json",...internalAuthHeaders()},body:JSON.stringify({
+action:"draft",dryRun:false,
+crmAccountName:o.school||o.contact||o.name,
+crmDealName:o.name,
+dealAmount:o.value,
+quoteNumber:o.quoteNumber||`ORD-${o.id}`,
+lineItems:lineItems.length?lineItems:undefined,
+notes:o.notes||`Order #${String(o.id).slice(-6).toUpperCase()} — created via ST1 RevOps.`,
+})});
+const d=await r.json();
+if(d.error||d.invoiceSyncFailed) throw new Error(d.error||"Invoice sync failed");
+return d;
 };
 const SPORT_WINDOWS = {
 "Track & Field":    "Nov–Jan",
@@ -1262,7 +1292,7 @@ const zStage=zs(zd.Stage)||"Quoted";
 const localStage=DEAL_STAGES.includes(zStage)?zStage:(dealStageMap[zStage]||"Quoted");
 if(existingDealZohoIds.has(zd.id)){
 const local=existingDeals.find(d=>d.zohoId===zd.id);
-if(local&&local.stage!==localStage){dispatch("UPDATE_DEAL",{id:local.id,stage:localStage,zohoStage:zStage});dealsUpdated++;autoInvoiceOnClosedWon(local,local.stage,localStage,toast);}
+if(local&&local.stage!==localStage){dispatch("UPDATE_DEAL",{id:local.id,stage:localStage,zohoStage:zStage});dealsUpdated++;autoInvoiceOnClosedWon(local,local.stage,localStage,toast,dispatch);}
 if(local&&!filledQuoteLines(local.quoteItems).length){const qf=quoteFieldsFromZohoRecord(zd);if(qf.quoteItems.length)dispatch("UPDATE_DEAL",{id:local.id,...qf});}
 }else if(!dealIsSuppressed({id:"zoho_d_"+zd.id,zohoId:zd.id},s)){
 dispatch("ADD_DEAL",{id:"zoho_d_"+zd.id,zohoId:zd.id,name:zs(zd.Deal_Name)||"Untitled",contact:zs(zd.Contact_Name),school:zs(zd.Account_Name),value:Number(zd.Amount)||0,stage:localStage,zohoStage:zStage,notes:zd.Description||"",followUpDate:zd.Closing_Date||"",lastTouch:now,priority:"warm",touchHistory:[],source:"zoho-crm",...quoteFieldsFromZohoRecord(zd)});
@@ -2014,7 +2044,7 @@ function ModAnalytics() {
     crmUpdate("Deals",liveDeal.zohoId,{Stage:st});
     dispatch("LOG",{msg:`${cu?.name||"Someone"} moved ${liveDeal.name} → ${st}`});
     toast("Stage updated","success");
-    autoInvoiceOnClosedWon(liveDeal,prev,st,toast);
+    autoInvoiceOnClosedWon(liveDeal,prev,st,toast,dispatch);
   };
   const setDealFollowUp=(dateStr)=>{
     if(!liveDeal) return;
@@ -2240,6 +2270,7 @@ function ModAnalytics() {
               {liveDeal.product&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.blue,background:B.blueBg,padding:"2px 6px",borderRadius:3}}>{liveDeal.product}</span>}
               {liveDeal.quoteNumber&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.muted,background:B.surface,padding:"2px 6px",borderRadius:3}}>Q {liveDeal.quoteNumber}</span>}
             </div>
+            {liveDeal.invoiceSyncError&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.red,background:B.redBg,borderRadius:6,padding:"8px 10px",marginBottom:12}}>{liveDeal.invoiceSyncError}</div>}
             <Lbl s={{marginBottom:5}}>Stage</Lbl>
             <div style={{display:"flex",flexWrap:"wrap",gap:4,marginBottom:14}}>
               {DEAL_STAGES.map(st=>(
@@ -3092,10 +3123,10 @@ const sendDone=created?.status==="SENT";
 const createDraft=async()=>{
 setInvoiceCreated(p=>({...p,[ikey+"_creating"]:true}));
 try{
-const r=await fetch("/api/agents/ledger/invoice",{method:"POST",headers:{"Content-Type":"application/json",...internalAuthHeaders()},body:JSON.stringify({action:"draft",crmDealId:meta.crmDealId,crmDealName:customerName,dryRun:false})});
+const r=await fetch("/api/agents/ledger/invoice",{method:"POST",headers:{"Content-Type":"application/json",...internalAuthHeaders()},body:JSON.stringify({action:"draft",crmDealId:meta.crmDealId,crmDealName:customerName,quoteNumber:meta.quoteNumber,dryRun:false})});
 const d=await r.json();
 if(d.ok){setInvoiceCreated(p=>({...p,[ikey]:d}));toast(`Invoice ${d.invoiceNumber||d.zohoInvoiceId} created as draft`,"success");}
-else toast(d.error||"Draft creation failed","error");
+else toast(d.error||"Invoice sync failed — customer not found","error");
 }catch(e){toast(e.message,"error");}
 setInvoiceCreated(p=>({...p,[ikey+"_creating"]:false}));
 };
@@ -5665,6 +5696,7 @@ return(<>
 </div>
 <button onClick={()=>setAccountDealModal(null)} style={{background:"none",border:"none",color:B.muted,fontSize:16,cursor:"pointer"}}>✕</button>
 </div>
+{((s.deals||[]).find(d=>d.id===accountDealModal.id)?.invoiceSyncError||accountDealModal.invoiceSyncError)&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.red,background:B.redBg,borderRadius:6,padding:"8px 10px",marginBottom:12}}>{(s.deals||[]).find(d=>d.id===accountDealModal.id)?.invoiceSyncError||accountDealModal.invoiceSyncError}</div>}
 <Lbl s={{marginBottom:5}}>Stage</Lbl>
 <div style={{display:"flex",flexWrap:"wrap",gap:4,marginBottom:12}}>
 {DEAL_STAGES.map(st=>(
@@ -5674,7 +5706,7 @@ dispatch("UPDATE_DEAL",{id:accountDealModal.id,stage:st});
 crmUpdate("Deals",accountDealModal.zohoId,{Stage:st});
 setAccountDealModal(m=>({...m,stage:st}));
 toast("Stage updated","success");
-autoInvoiceOnClosedWon(accountDealModal,prevStage,st,toast);
+autoInvoiceOnClosedWon(accountDealModal,prevStage,st,toast,dispatch);
 }} style={{background:accountDealModal.stage===st?DSC[st]:B.surface,color:accountDealModal.stage===st?B.white:B.muted,border:`1px solid ${accountDealModal.stage===st?DSC[st]:B.border}`,borderRadius:3,padding:"3px 7px",fontSize:9,cursor:"pointer"}}>{st}</button>
 ))}
 </div>
@@ -6122,7 +6154,7 @@ setShowNewDeal(false);setDealForm({name:"",value:"",stage:"Quoted",product:""});
 <Lbl s={{marginBottom:5}}>Stage</Lbl>
 <div style={{display:"flex",flexWrap:"wrap",gap:4,marginBottom:10}}>
 {DEAL_STAGES.map(st=>(
-<button key={st} onClick={()=>{const prevStage=activeDeal.stage;dispatch("UPDATE_DEAL",{id:activeDeal.id,stage:st});crmUpdate("Deals",activeDeal.zohoId,{Stage:st});toast("Stage updated","success");autoInvoiceOnClosedWon(activeDeal,prevStage,st,toast);}} style={{background:activeDeal.stage===st?DSC[st]:B.surface,color:activeDeal.stage===st?B.white:B.muted,border:`1px solid ${activeDeal.stage===st?DSC[st]:B.border}`,borderRadius:3,padding:"3px 7px",fontSize:9,cursor:"pointer"}}>{st}</button>
+<button key={st} onClick={()=>{const prevStage=activeDeal.stage;dispatch("UPDATE_DEAL",{id:activeDeal.id,stage:st});crmUpdate("Deals",activeDeal.zohoId,{Stage:st});toast("Stage updated","success");autoInvoiceOnClosedWon(activeDeal,prevStage,st,toast,dispatch);}} style={{background:activeDeal.stage===st?DSC[st]:B.surface,color:activeDeal.stage===st?B.white:B.muted,border:`1px solid ${activeDeal.stage===st?DSC[st]:B.border}`,borderRadius:3,padding:"3px 7px",fontSize:9,cursor:"pointer"}}>{st}</button>
 ))}
 </div>
 <div style={{display:"flex",gap:6,marginBottom:10}}>
@@ -6900,7 +6932,7 @@ style={{width:100,background:B.surface,border:`1px solid ${B.orange}`,color:B.or
 <Lbl s={{marginBottom:5}}>Move Stage</Lbl>
 <div style={{display:"flex",flexWrap:"wrap",gap:4,marginBottom:10}}>
 {DEAL_STAGES.map(st=>(
-<button key={st} onClick={()=>{const prevStage=sel_d.stage;dispatch("UPDATE_DEAL",{id:sel_d.id,stage:st});dispatch("LOG",{msg:cu?.name+" moved "+sel_d.name+" → "+st});toast("Moved to "+st,"success");if(sel_d.zohoId)fetch("/api/zoho",{method:"POST",headers:{"Content-Type":"application/json",...internalAuthHeaders()},body:JSON.stringify({service:"crm",endpoint:`/Deals/${sel_d.zohoId}`,method:"PUT",body:{data:[{Stage:st}]}})}).catch(()=>{});autoInvoiceOnClosedWon(sel_d,prevStage,st,toast);}} style={{background:sel_d.stage===st?DSC[st]:B.surface,color:sel_d.stage===st?B.white:B.muted,border:"1px solid "+(sel_d.stage===st?DSC[st]:B.border),borderRadius:3,padding:"3px 7px",fontSize:9,fontFamily:"'Lexend',sans-serif"}}>{st}</button>
+<button key={st} onClick={()=>{const prevStage=sel_d.stage;dispatch("UPDATE_DEAL",{id:sel_d.id,stage:st});dispatch("LOG",{msg:cu?.name+" moved "+sel_d.name+" → "+st});toast("Moved to "+st,"success");if(sel_d.zohoId)fetch("/api/zoho",{method:"POST",headers:{"Content-Type":"application/json",...internalAuthHeaders()},body:JSON.stringify({service:"crm",endpoint:`/Deals/${sel_d.zohoId}`,method:"PUT",body:{data:[{Stage:st}]}})}).catch(()=>{});autoInvoiceOnClosedWon(sel_d,prevStage,st,toast,dispatch);}} style={{background:sel_d.stage===st?DSC[st]:B.surface,color:sel_d.stage===st?B.white:B.muted,border:"1px solid "+(sel_d.stage===st?DSC[st]:B.border),borderRadius:3,padding:"3px 7px",fontSize:9,fontFamily:"'Lexend',sans-serif"}}>{st}</button>
 ))}
 </div>
 <div style={{marginBottom:9}}>
@@ -7004,29 +7036,14 @@ dispatch("LOG",{msg:`Order "${o.name}" advanced to ${nextStage}`});
 if(nextStage==="Invoiced"){
 setInvoicing(o.id);
 try{
-const r=await fetch("/api/zoho",{method:"POST",headers:{"Content-Type":"application/json",...internalAuthHeaders()},body:JSON.stringify({
-service:"books",endpoint:"/invoices",method:"POST",
-body:{
-customer_name:o.school||o.contact||o.name,
-date:today(),
-due_date:new Date(Date.now()+30*86400000).toISOString().slice(0,10),
-line_items:o.items?.length>0
-?o.items.map(item=>({name:item.name,description:item.description||"",quantity:item.qty||1,rate:item.rate||0}))
-:[{name:o.name,description:o.notes||"",quantity:1,rate:o.value||0}],
-notes:`Order #${o.id.slice(-6).toUpperCase()} — created via ST1 RevOps.`,
-terms:"Due within 30 days.",
-}
-})});
-const d=await r.json();
-if(d.invoice?.invoice_id||d.invoice_id){
-const invId=d.invoice?.invoice_id||d.invoice_id;
-const invNum=d.invoice?.invoice_number||d.invoice_number||invId;
-dispatch("UPDATE_ORDER",{id:o.id,zohoInvoiceId:invId,invoiceNumber:invNum});
-toast(`✓ Zoho Books invoice created: ${invNum}`,"success");
+const d=await createZohoInvoiceFromOrder(o);
+if(d.zohoInvoiceId||d.invoiceNumber){
+dispatch("UPDATE_ORDER",{id:o.id,zohoInvoiceId:d.zohoInvoiceId,invoiceNumber:d.invoiceNumber});
+toast(`✓ Zoho Books invoice created: ${d.invoiceNumber||d.zohoInvoiceId}`,"success");
 }else{
-toast("Order invoiced · Zoho Books not fully connected","info");
+toast(d.error||"Invoice sync failed — customer not found","error");
 }
-}catch(e){toast(`Invoice sync failed: ${e.message.slice(0,60)}`,"error");}
+}catch(e){toast(`Invoice sync failed: ${e.message.slice(0,120)}`,"error");}
 setInvoicing(null);
 }
 };
@@ -7182,15 +7199,9 @@ return(
 <button onClick={async()=>{
 setInvoicing(o.id);
 try{
-const r=await fetch("/api/zoho",{method:"POST",headers:{"Content-Type":"application/json",...internalAuthHeaders()},body:JSON.stringify({
-service:"books",endpoint:"/invoices",method:"POST",
-body:{customer_name:o.school||o.contact||o.name,date:today(),due_date:new Date(Date.now()+30*86400000).toISOString().slice(0,10),
-line_items:o.items?.length>0?o.items.map(item=>({name:item.name,description:item.description||"",quantity:item.qty||1,rate:item.rate||0})):[{name:o.name,description:o.notes||"",quantity:1,rate:o.value||0}],
-notes:`Order from ST1 RevOps.`,terms:"Due within 30 days."}
-})});
-const d=await r.json();
-if(d.invoice?.invoice_id){dispatch("UPDATE_ORDER",{id:o.id,zohoInvoiceId:d.invoice.invoice_id,invoiceNumber:d.invoice.invoice_number});toast(`✓ Zoho invoice: ${d.invoice.invoice_number}`,"success");}
-else toast("Zoho Books not connected — invoice not created","info");
+const d=await createZohoInvoiceFromOrder(o);
+if(d.zohoInvoiceId||d.invoiceNumber){dispatch("UPDATE_ORDER",{id:o.id,zohoInvoiceId:d.zohoInvoiceId,invoiceNumber:d.invoiceNumber});toast(`✓ Zoho invoice: ${d.invoiceNumber||d.zohoInvoiceId}`,"success");}
+else toast(d.error||"Invoice sync failed — customer not found","error");
 }catch(e){toast(`Invoice error: ${e.message}`,"error");}
 setInvoicing(null);
 }} disabled={invoicing===o.id} style={{background:B.greenBg,color:B.green,border:`1px solid ${B.green}40`,borderRadius:4,padding:"4px 10px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,cursor:"pointer",width:"100%",marginTop:4}}>
@@ -8152,7 +8163,7 @@ dispatch("SET_CONTACTS_LAST_SYNC",now);
 const existingDeals=s.deals||[]; const existingDealZohoIds=new Set(existingDeals.map(d=>d.zohoId).filter(Boolean));
 const stageMap={"Qualification":"Quoted","Value Proposition":"Quoted","Id. Decision Makers":"Follow-Up 1","Perception Analysis":"Follow-Up 1","Proposal/Price Quote":"Quoted","Negotiation/Review":"Negotiating","Closed Won":"Closed Won","Closed Lost":"Closed Lost"};
 let dealsAdded=0,dealsUpdated=0;
-dealRows.forEach(zd=>{const zn=v=>typeof v==="string"?v:v?.name||v?.display_value||"";const zStage=zn(zd.Stage)||"Quoted";const localStage=DEAL_STAGES.includes(zStage)?zStage:(stageMap[zStage]||"Quoted");if(existingDealZohoIds.has(zd.id)){const local=existingDeals.find(d=>d.zohoId===zd.id);if(local&&local.stage!==localStage){dispatch("UPDATE_DEAL",{id:local.id,stage:localStage,zohoStage:zStage});dealsUpdated++;autoInvoiceOnClosedWon(local,local.stage,localStage,toast);}if(local&&!filledQuoteLines(local.quoteItems).length){const qf=quoteFieldsFromZohoRecord(zd);if(qf.quoteItems.length)dispatch("UPDATE_DEAL",{id:local.id,...qf});}}else if(!dealIsSuppressed({id:"zoho_d_"+zd.id,zohoId:zd.id},s)){dispatch("ADD_DEAL",{id:"zoho_d_"+zd.id,zohoId:zd.id,name:zn(zd.Deal_Name)||"Untitled",contact:zn(zd.Contact_Name),school:zn(zd.Account_Name),value:Number(zd.Amount)||0,stage:localStage,zohoStage:zStage,notes:zd.Description||"",followUpDate:zd.Closing_Date||"",lastTouch:now,priority:"warm",touchHistory:[],source:"zoho-crm",...quoteFieldsFromZohoRecord(zd)});dealsAdded++;}});
+dealRows.forEach(zd=>{const zn=v=>typeof v==="string"?v:v?.name||v?.display_value||"";const zStage=zn(zd.Stage)||"Quoted";const localStage=DEAL_STAGES.includes(zStage)?zStage:(stageMap[zStage]||"Quoted");if(existingDealZohoIds.has(zd.id)){const local=existingDeals.find(d=>d.zohoId===zd.id);if(local&&local.stage!==localStage){dispatch("UPDATE_DEAL",{id:local.id,stage:localStage,zohoStage:zStage});dealsUpdated++;autoInvoiceOnClosedWon(local,local.stage,localStage,toast,dispatch);}if(local&&!filledQuoteLines(local.quoteItems).length){const qf=quoteFieldsFromZohoRecord(zd);if(qf.quoteItems.length)dispatch("UPDATE_DEAL",{id:local.id,...qf});}}else if(!dealIsSuppressed({id:"zoho_d_"+zd.id,zohoId:zd.id},s)){dispatch("ADD_DEAL",{id:"zoho_d_"+zd.id,zohoId:zd.id,name:zn(zd.Deal_Name)||"Untitled",contact:zn(zd.Contact_Name),school:zn(zd.Account_Name),value:Number(zd.Amount)||0,stage:localStage,zohoStage:zStage,notes:zd.Description||"",followUpDate:zd.Closing_Date||"",lastTouch:now,priority:"warm",touchHistory:[],source:"zoho-crm",...quoteFieldsFromZohoRecord(zd)});dealsAdded++;}});
 const liveDealIds=new Set(dealRows.map(zd=>zd.id));
 const deadDealIds=existingDeals.filter(d=>d.zohoId&&!liveDealIds.has(d.zohoId)).map(d=>d.id);
 if(deadDealIds.length) dispatch("REMOVE_DEALS",deadDealIds);
@@ -13032,6 +13043,9 @@ crmDealName:selectedDeal?.name||manualDealName||undefined,
 crmAccountName:selectedDeal?.school||manualDealName||undefined,
 dealAmount:selectedDeal?.value||undefined,
 poNumber:poOverride||undefined,
+quoteNumber:selectedDeal?.quoteNumber||undefined,
+lineItems:filledQuoteLines(selectedDeal?.quoteItems).length?filledQuoteLines(selectedDeal.quoteItems):undefined,
+zohoContactId:selectedDeal?.booksContactId||undefined,
 });
 const previewInvoice=async()=>{
 if(!selectedDeal&&!manualDealName.trim()){toast("Pick a deal or type a customer name","error");return;}
