@@ -21,7 +21,6 @@ export const KNOWN_MODS = new Set([
   "integrations",
   "edgar",
   "expansion",
-  "finance",
   "team-stores",
   "team-store-statement",
   "team-store-reconcile",
@@ -43,6 +42,7 @@ export const MOD_ALIASES = {
   "cc-social": "briefing",
   "cc-image": "briefing",
   "ai-knowledge": "integrations",
+  finance: "briefing",
 };
 
 export const PROSPECT_TABS = new Set([
