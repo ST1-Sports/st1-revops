@@ -1982,25 +1982,8 @@ Channel: ${slackChannelName}`);
                     : "Connect Gmail to let ST1 RevOps scan for customer orders, quote requests, and RFQs."}
                 </div>
                 {!gmailStatus&&(
-                  <div style={{background:B.surface,border:`1px solid ${B.border}`,borderRadius:5,padding:12,marginBottom:10,fontSize:11}}>
-                    <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:2,marginBottom:8}}>ONE-TIME SETUP</div>
-                    {[
-                      ["1","Go to console.cloud.google.com → create or select a project"],
-                      ["2","Enable Gmail API: APIs & Services → Library → search Gmail → Enable"],
-                      ["3","Create OAuth credentials: APIs & Services → Credentials → Create Credentials → OAuth client ID → Web application"],
-                      ["4","Add Authorized Redirect URI: https://YOUR-VERCEL-DOMAIN/api/gmail-setup"],
-                      ["5","Add GMAIL_CLIENT_ID and GMAIL_CLIENT_SECRET to Vercel env vars"],
-                      ["6","Visit /api/gmail-setup on your deployed app and click Connect Gmail"],
-                      ["7","Copy GMAIL_REFRESH_TOKEN into Vercel env vars, then redeploy"],
-                    ].map(([n,step])=>(
-                      <div key={n} style={{display:"flex",gap:9,padding:"5px 0",borderBottom:`1px solid ${B.border}`}}>
-                        <span style={{fontFamily:"'Russo One',sans-serif",fontSize:11,color:B.orange,minWidth:16,flexShrink:0}}>{n}</span>
-                        <span style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,lineHeight:1.5}}>{step}</span>
-                      </div>
-                    ))}
-                    <div style={{marginTop:8,fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>
-                      For OAuth consent screen: set to "Internal" (Google Workspace) or "External" and add your email as a test user.
-                    </div>
+                  <div style={{background:B.surface,border:`1px solid ${B.border}`,borderRadius:5,padding:12,marginBottom:10,fontSize:11,fontFamily:"'Lexend',sans-serif",color:B.text,lineHeight:1.6}}>
+                    Mailboxes are connected in <a href="/settings" style={{color:B.orange,fontWeight:600}}>Settings → Email Status</a>: your own Gmail (Sign in with Google), your BDR, and — for admins — the company mailbox. No tokens to copy into Vercel.
                   </div>
                 )}
                 <div style={{display:"flex",gap:8,alignItems:"center"}}>
@@ -2008,7 +1991,7 @@ Channel: ${slackChannelName}`);
                     {testing==="gmail"?"TESTING...":gmailStatus?"✓ RECONNECT":"TEST CONNECTION"}
                   </OBtn>
                   <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>
-                    Env vars needed: GMAIL_CLIENT_ID, GMAIL_CLIENT_SECRET, GMAIL_REFRESH_TOKEN
+                    Connect or reconnect in Settings → Email Status
                   </div>
                 </div>
               </ConnCard>

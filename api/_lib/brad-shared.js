@@ -6,6 +6,7 @@ import { prisma } from './prisma.js'
 import { sendSlackText } from './slack.js'
 import { junkReplyReason } from './junkReply.js'
 import { serverCallHeaders } from './agentGate.js'
+import { getGmailAccessToken } from './gmailAuth.js'
 
 export async function classifyEmailIntent(subject, bodyText, extra = {}) {
   if (junkReplyReason({
@@ -72,32 +73,22 @@ function bradSlackChannels() {
   ].filter(Boolean))]
 }
 
-export async function notifyBradSlack(assigned, contactName, fromEmail, subject, bodyText) {
-  const text = `🔥 *Brad got a positive reply — assigned to ${assigned.name}*\n*From:* ${contactName} (${fromEmail})\n*Subject:* ${subject}\n\n_"${(bodyText || '').slice(0, 200)}${(bodyText || '').length > 200 ? '…' : ''}"_`
+export async function notifyBradSlack(assigned, contactName, fromEmail, subject, bodyText, bdrName = 'Brad') {
+  const who = String(bdrName || 'Brad').trim().split(/\s+/)[0] || 'Brad'
+  const text = `🔥 *${who} got a positive reply — assigned to ${assigned.name}*\n*From:* ${contactName} (${fromEmail})\n*Subject:* ${subject}\n\n_"${(bodyText || '').slice(0, 200)}${(bodyText || '').length > 200 ? '…' : ''}"_`
   const result = await sendSlackText({ channels: bradSlackChannels(), text })
   if (!result.ok) console.warn('[brad] slack notify failed:', result.error)
   return result
 }
 
 async function sendNotifyGmail({ to, subject, body }) {
-  const clientId = process.env.GMAIL_CLIENT_ID
-  const clientSecret = process.env.GMAIL_CLIENT_SECRET
-  const refresh = process.env.GMAIL_REFRESH_TOKEN
-  if (!clientId || !clientSecret || !refresh) {
-    return { ok: false, error: 'Gmail not configured' }
+  // The company mailbox (Settings → Email Status), else the GMAIL_REFRESH_TOKEN fallback.
+  let accessToken
+  try {
+    accessToken = await getGmailAccessToken('')
+  } catch (err) {
+    return { ok: false, error: err.message }
   }
-  const tokenRes = await fetch('https://oauth2.googleapis.com/token', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: new URLSearchParams({
-      client_id: clientId,
-      client_secret: clientSecret,
-      refresh_token: refresh,
-      grant_type: 'refresh_token',
-    }).toString(),
-  })
-  const tokenData = await tokenRes.json()
-  if (!tokenData.access_token) return { ok: false, error: 'Gmail token refresh failed' }
 
   const raw = [
     `To: ${to}`,
@@ -110,7 +101,7 @@ async function sendNotifyGmail({ to, subject, body }) {
   const encoded = Buffer.from(raw).toString('base64url')
   const sendRes = await fetch('https://gmail.googleapis.com/gmail/v1/users/me/messages/send', {
     method: 'POST',
-    headers: { Authorization: `Bearer ${tokenData.access_token}`, 'Content-Type': 'application/json' },
+    headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
     body: JSON.stringify({ raw: encoded }),
   })
   const sendData = await sendRes.json().catch(() => ({}))

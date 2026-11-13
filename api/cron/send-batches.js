@@ -28,6 +28,7 @@ import { prisma } from '../_lib/prisma.js';
 import { callGmailInternal } from '../gmail.js';
 import { loadAllOutreachBatches } from '../_lib/outreachLoad.js';
 import { claimedEmails, emailKey, leadStoppedAuto } from '../_lib/outreachSent.js';
+import { bdrForCampaign, loadAssignments } from '../_lib/bdr.js';
 
 
 const SEND_PAUSE_MS   = 30_000;  // 30s between emails
@@ -237,6 +238,8 @@ export default async function handler(req, res) {
         await saveState({ ...state, campaigns });
 
         const rep = camp.repId ? reps.find(r => r.id === camp.repId) : null;
+        // BDR campaigns send from the BDR of the rep who scheduled them (older ones: Brad).
+        const bdr = camp.fromBrad ? bdrForCampaign(await loadAssignments(), camp) : null;
         const forceResend = !!batchInfo.forceResend;
         const batchContacts = batchInfo.batchContacts || {};
         const updEnr = [...(camp.enrollments || [])];
@@ -319,12 +322,11 @@ export default async function handler(req, res) {
                 subject,
                 body: plainBody,
                 htmlBody,
-                // Bulk-imported sequences send as Brad's own monitored inbox
-                // (matches api/agents/brad-send.js) instead of the campaign
-                // owner's — replies land where the reply-classifying cron
-                // already watches.
-                ...(camp.fromBrad
-                  ? { from_name: "Brad Hofer", from_email: "brad@shopst1sports.com", reply_to: "brad@shopst1sports.com", repEnvKey: "BRAD" }
+                // Bulk-imported sequences send from the scheduling rep's BDR
+                // mailbox (matches api/agents/brad-send.js) instead of the rep's
+                // own — replies land where the reply-classifying cron watches.
+                ...(bdr
+                  ? { from_name: bdr.name, from_email: bdr.email, reply_to: bdr.email, repEnvKey: bdr.gmailKey }
                   : { ...(rep?.gmailEnvKey ? { repEnvKey: rep.gmailEnvKey } : {}), ...(rep?.email ? { reply_to: rep.email, from_name: rep.name } : {}) }),
             });
 

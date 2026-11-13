@@ -2,21 +2,27 @@
  * /api/gmail  — Gmail API proxy (read-only inbox access + send)
  *
  * Required env vars:
- *   GMAIL_CLIENT_ID, GMAIL_CLIENT_SECRET, GMAIL_REFRESH_TOKEN
- *   (get them from /api/gmail-setup)
+ *   GMAIL_CLIENT_ID, GMAIL_CLIENT_SECRET. Mailboxes are connected in Settings → Email Status
+ *   (company mailbox) and Settings → My BDR; GMAIL_REFRESH_TOKEN is only a fallback.
  *
  * For per-rep sending, tokens are stored in the database (Setting model).
  * Falls back to GMAIL_REFRESH_TOKEN_{REPKEY} env var for backwards compat.
  * Pass repEnvKey:"JOSH" in the request body to use a rep-specific token.
  *
  * POST body: { action: "list" | "get" | "send" | "profile", repEnvKey?: string, ... }
+ *
+ * asBdr: true — use the signed-in rep's own BDR mailbox (Settings → My BDR) instead of a key:
+ * the server picks the mailbox and, for sends, the BDR's From / Reply-To. Admins may add
+ * bdrRepId to use another rep's BDR.
  */
 
 import { prisma } from './_lib/prisma.js';
 import { connectedRefreshTokenForKey, normalizeGmailKey } from './_lib/repGmailToken.js';
+import { companyRefreshToken } from './_lib/companyMailbox.js';
 import { readRep } from './_lib/session.js';
 import { classifyEmailIntent } from './_lib/brad-shared.js';
 import { encodeMimeWord, encodeMailbox, encodeFilename } from './_lib/mimeHeader.js';
+import { LEGACY_BDR, bdrForRep, loadAssignments, ownerOfBdrKey } from './_lib/bdr.js';
 
 export const config = {
   api: { bodyParser: { sizeLimit: "2mb" } },
@@ -34,9 +40,9 @@ async function getToken(repEnvKey = "") {
     throw new Error("Gmail not configured — set GMAIL_CLIENT_ID and GMAIL_CLIENT_SECRET in Vercel env vars");
   }
 
-  // Look up refresh token: the rep's Google sign-in connection, then the older per-rep
-  // database token, then env var (backwards compat).
-  let refreshToken = repEnvKey ? await connectedRefreshTokenForKey(repEnvKey) : null;
+  // Look up refresh token: the rep's Google sign-in connection (or BDR / company mailbox
+  // connected in Settings), then the older per-rep database token, then env var (backwards compat).
+  let refreshToken = repEnvKey ? await connectedRefreshTokenForKey(repEnvKey) : await companyRefreshToken();
   if (repEnvKey && !refreshToken) {
     try {
       const dbKey = `gmail_token_${repEnvKey.toUpperCase().replace(/[^A-Z0-9]/g, "_")}`;
@@ -51,7 +57,7 @@ async function getToken(repEnvKey = "") {
     refreshToken = process.env[refreshTokenVar];
     if (!refreshToken) {
       if (repEnvKey) throw new Error(`Gmail not connected for "${repEnvKey}" — have that rep sign in with Google`);
-      throw new Error("Gmail not configured — visit /api/gmail-setup");
+      throw new Error("Company mailbox not connected — an admin can connect it in Settings → Email Status");
     }
   }
 
@@ -103,15 +109,26 @@ function extractBody(payload) {
 
 // Set only by callGmailInternal (server code in this deployment); a network request cannot carry it.
 const TRUSTED = Symbol("gmail-internal-call");
-// Shared team mailboxes any signed-in rep may use; every other key is one rep's own Gmail.
-const SHARED_KEYS = new Set(["", "BRAD"]);
-
-/** Who may use which mailbox. Pure; exported for tests. */
-export function gmailKeyAllowed(me, repEnvKey) {
+/**
+ * Who may use which mailbox. Pure; exported for tests.
+ * - the default company mailbox ("") — any signed-in rep
+ * - a rep's own Gmail, or their own BDR mailbox — that rep (admins: any)
+ * - Brad's mailbox while no rep has claimed it as their BDR — any signed-in rep (as before)
+ */
+export function gmailKeyAllowed(me, repEnvKey, assignments = {}) {
   if (!me) return false;
   const key = normalizeGmailKey(repEnvKey);
-  if (SHARED_KEYS.has(key) || me.isAdmin) return true;
+  if (key === "" || me.isAdmin) return true;
+  const bdrOwner = ownerOfBdrKey(assignments, key);
+  if (bdrOwner) return bdrOwner === me.repId;
+  if (key === LEGACY_BDR.gmailKey) return true;
   return Boolean(me.gmailEnvKey) && normalizeGmailKey(me.gmailEnvKey) === key;
+}
+
+/** True when this mailbox key is a BDR mailbox (any rep's, or the original Brad). Pure. */
+export function isBdrKey(repEnvKey, assignments = {}) {
+  const key = normalizeGmailKey(repEnvKey);
+  return Boolean(key) && (key === LEGACY_BDR.gmailKey || Boolean(ownerOfBdrKey(assignments, key)));
 }
 
 /**
@@ -139,14 +156,27 @@ export default async function handler(req, res) {
   if (req.method === "OPTIONS") return res.status(200).end();
   if (req.method !== "POST") return res.status(405).json({ error: "POST only" });
 
-  const { action, messageId, maxResults = 30, query, to_email, to_name, subject, body: emailBody, htmlBody, cc, bcc, replyToMessageId, reply_to, from_name, repEnvKey, attachments } = req.body || {};
+  const { action, messageId, maxResults = 30, query, to_email, to_name, subject, body: emailBody, htmlBody, cc, bcc, replyToMessageId, attachments, asBdr, bdrRepId } = req.body || {};
+  let { reply_to, from_name, repEnvKey } = req.body || {};
+  let fromEmailOverride = null;
+  const assignments = await loadAssignments().catch(() => ({}));
 
   // Reads mail and sends as a person: signed-in reps only, and a personal mailbox only for its
   // owner (or an admin). Server jobs come in through callGmailInternal.
   if (!req[TRUSTED]) {
     const me = await readRep(req);
     if (!me) return res.status(401).json({ error: "Sign in again to use Gmail." });
-    if (!gmailKeyAllowed(me, repEnvKey)) return res.status(403).json({ error: "That mailbox belongs to another rep." });
+    if (asBdr) {
+      const forRep = bdrRepId && me.isAdmin ? String(bdrRepId) : me.repId;
+      const bdr = bdrForRep(assignments, forRep);
+      if (!bdr) return res.status(400).json({ error: "Set up your BDR first: Settings → My BDR." });
+      repEnvKey = bdr.gmailKey;
+      from_name = bdr.name;
+      fromEmailOverride = bdr.email;
+      reply_to = bdr.email;
+    } else if (!gmailKeyAllowed(me, repEnvKey, assignments)) {
+      return res.status(403).json({ error: "That mailbox belongs to another rep." });
+    }
   }
 
   if (!action) return res.status(400).json({ error: "Missing action" });
@@ -270,8 +300,8 @@ export default async function handler(req, res) {
       // api/cron/send-batches.js both also reach this endpoint with
       // repEnvKey:"BRAD" for fromBrad campaigns, and duplicating this check
       // in every caller is exactly how it got missed once already.
-      if (repEnvKey === "BRAD" && process.env.BRAD_SENDING_ENABLED !== "true") {
-        return res.status(403).json({ ok: false, sent: false, error: "Brad sending is disabled. Set BRAD_SENDING_ENABLED=true to allow approved sends." });
+      if (isBdrKey(repEnvKey, assignments) && process.env.BRAD_SENDING_ENABLED !== "true") {
+        return res.status(403).json({ ok: false, sent: false, error: "BDR sending is disabled. Set BRAD_SENDING_ENABLED=true to allow approved sends." });
       }
       if (!to_email) return res.status(400).json({ error: "to_email required" });
       if (!subject)  return res.status(400).json({ error: "subject required" });
@@ -281,7 +311,7 @@ export default async function handler(req, res) {
       const contentType = htmlBody ? "text/html; charset=UTF-8" : "text/plain; charset=UTF-8";
       // From: set only when both name and address are provided explicitly.
       // Gmail requires the address to match the authenticated account or a Send As alias.
-      const fromEmail = req.body.from_email || null;
+      const fromEmail = fromEmailOverride || req.body.from_email || null;
       const fromHeader = (from_name && fromEmail)
         ? encodeMailbox(from_name, fromEmail)
         : null;
@@ -372,6 +402,6 @@ export default async function handler(req, res) {
     return res.status(400).json({ error: `Unknown action: ${action}` });
 
   } catch(err) {
-    return res.status(500).json({ error: err.message, setup: "/api/gmail-setup" });
+    return res.status(500).json({ error: err.message, setup: "/settings" });
   }
 }

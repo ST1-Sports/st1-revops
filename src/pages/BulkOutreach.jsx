@@ -201,7 +201,8 @@ function fmtDT(iso) {
 function Lbl({ children, c, s: sty }) { return <div style={{ fontFamily: "'Lexend Zetta',sans-serif", fontSize: 8, color: c || B.muted, letterSpacing: 1, ...sty }}>{children}</div>; }
 function OBtn({ children, onClick, disabled, style: sty }) { return <button onClick={onClick} disabled={disabled} style={{ background: disabled ? B.border : B.orange, color: disabled ? B.muted : B.white, border: "none", borderRadius: 5, padding: "8px 16px", fontSize: 11, fontFamily: "'Lexend Zetta',sans-serif", fontWeight: 700, letterSpacing: .4, cursor: disabled ? "not-allowed" : "pointer", ...sty }}>{children}</button>; }
 function GBtn({ children, onClick, disabled, style: sty }) { return <button onClick={onClick} disabled={disabled} style={{ background: B.white, color: B.textMid, border: `1px solid ${B.borderD}`, borderRadius: 5, padding: "7px 13px", fontSize: 11, fontFamily: "'Lexend',sans-serif", cursor: disabled ? "default" : "pointer", opacity: disabled ? .6 : 1, ...sty }}>{children}</button>; }
-function GoPanel({ readyCount, pace, setPace, run, onGo, onStop, canGo, goLimit, setGoLimit, stepIndices, goStep, setGoStep }) {
+function GoPanel({ readyCount, pace, setPace, run, onGo, onStop, canGo, goLimit, setGoLimit, stepIndices, goStep, setGoStep, bdr }) {
+  const bdrFirst = (bdr?.name || "your BDR").split(/\s+/)[0];
   const { thisGo, remaining, dripMins } = goBatchPreview(readyCount, goLimit, GO_DRIP_MS);
   const presets = [10, 25, 50, 100];
   const stepLabel = `Email ${goStep + 1}`;
@@ -220,7 +221,7 @@ function GoPanel({ readyCount, pace, setPace, run, onGo, onStop, canGo, goLimit,
       )}
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: 12 }}>
         <div>
-          <Lbl c={B.orange}>SEND {stepLabel.toUpperCase()} FROM BRAD</Lbl>
+          <Lbl c={B.orange}>SEND {stepLabel.toUpperCase()} FROM {bdrFirst.toUpperCase()}</Lbl>
           <div style={{ fontSize: 13, fontWeight: 600, color: B.text, marginTop: 6 }}>
             {readyCount > 0
               ? `${readyCount.toLocaleString()} ${stepLabel}${readyCount !== 1 ? "s" : ""} ready — this GO sends ${thisGo.toLocaleString()}`
@@ -228,7 +229,7 @@ function GoPanel({ readyCount, pace, setPace, run, onGo, onStop, canGo, goLimit,
           </div>
           <div style={{ fontSize: 11, color: B.textMid, marginTop: 3, maxWidth: 560, lineHeight: 1.5 }}>
             {readyCount > 0
-              ? `Only the number you set next to GO goes out from brad@shopst1sports.com. ${remaining.toLocaleString()} stay waiting for the next GO.`
+              ? `Only the number you set next to GO goes out from ${bdr?.email || "your BDR"}. ${remaining.toLocaleString()} stay waiting for the next GO.`
               : `Nothing sends until you write ${stepLabel}, pick how many this GO, and press GO.`}
           </div>
         </div>
@@ -380,6 +381,12 @@ export default function BulkOutreach({ s, dispatch, toast, cu, setMod }) {
   const urlPace = searchParams.get("pace") || "";
   const [screen, setScreen] = useState(urlBatch || urlNew ? "review" : "list"); // list | review
   const [batches, setBatches] = useState([]);
+  // This rep's own BDR (Settings → My BDR): every GO, sent-check and bounce scan uses its mailbox.
+  const [bdrInfo, setBdrInfo] = useState(null);
+  const myBdr = bdrInfo?.bdr || null;
+  useEffect(() => {
+    fetch("/api/bdr").then(r => r.json()).then(d => setBdrInfo(d && !d.error ? d : { bdr: null })).catch(() => setBdrInfo({ bdr: null }));
+  }, []);
   const [uniqueSentCount, setUniqueSentCount] = useState(0);
   const [loadingList, setLoadingList] = useState(true);
 
@@ -1029,7 +1036,7 @@ Return JSON exactly as:
     if (lead.manualFollowUp) { toast("Manual follow-up — they will not get another automated email", "info"); return; }
     if (!lead.email) { toast("No email address for this contact", "error"); return; }
     if (!touchHasCopy(touch)) { toast("Write a real subject and body for this email first", "error"); return; }
-    if (!window.confirm(`Send this exact email now, from brad@shopst1sports.com?\n\nTo: ${lead.email}\nSubject: ${touch.subject}\n\n${touch.body}`)) return;
+    if (!window.confirm(`Send this exact email now, from ${myBdr?.email || "your BDR"}?\n\nTo: ${lead.email}\nSubject: ${touch.subject}\n\n${touch.body}`)) return;
     setSendingKey(`${lead.id}-${touchIdx}`);
     const result = await fireBradSend(lead, touchIdx);
     if (result.ok) toast(`Sent to ${lead.email}`, "success");
@@ -1059,8 +1066,8 @@ Return JSON exactly as:
     const mins = Math.ceil((queue.length * GO_DRIP_MS) / 60000);
     const leftover = goReady.length - queue.length;
     if (!window.confirm(drip
-      ? `Send ${queue.length} of ${goReady.length} ${stepLabel}(s) from brad@shopst1sports.com, one every 15 seconds (about ${mins} minute${mins !== 1 ? "s" : ""})?\n\n${leftover.toLocaleString()} stay waiting for the next GO. Keep this page open until it finishes.`
-      : `Send ${queue.length} of ${goReady.length} ${stepLabel}(s) from brad@shopst1sports.com now?\n\n${leftover.toLocaleString()} stay waiting for the next GO.`)) return;
+      ? `Send ${queue.length} of ${goReady.length} ${stepLabel}(s) from ${myBdr?.email || "your BDR"}, one every 15 seconds (about ${mins} minute${mins !== 1 ? "s" : ""})?\n\n${leftover.toLocaleString()} stay waiting for the next GO. Keep this page open until it finishes.`
+      : `Send ${queue.length} of ${goReady.length} ${stepLabel}(s) from ${myBdr?.email || "your BDR"} now?\n\n${leftover.toLocaleString()} stay waiting for the next GO.`)) return;
 
     goAbortRef.current = false;
     setGoRun({ mode: drip ? "drip" : "now", total: queue.length, done: 0, failed: 0, current: null, nextIn: 0 });
@@ -1267,7 +1274,7 @@ Return JSON exactly as:
           const chunk = emails.slice(i, i + CHUNK);
           const query = `in:sent to:(${chunk.map(e => `"${e}"`).join(" OR ")})`;
           const r = await fetch("/api/gmail", { method: "POST", headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ action: "list", repEnvKey: "BRAD", query, maxResults: 100 }) });
+            body: JSON.stringify({ action: "list", asBdr: true, query, maxResults: 100 }) });
           const d = await r.json();
           if (!r.ok || d.error) continue;
           for (const msg of d.messages || []) {
@@ -1291,7 +1298,7 @@ Return JSON exactly as:
         const byEmail = new Map(activeLeads.map(l => [l.email.toLowerCase(), l]));
         const bounceQuery = 'in:inbox (from:mailer-daemon OR from:postmaster OR subject:"Delivery Status Notification" OR subject:"Undelivered Mail" OR subject:"Mail delivery failed" OR subject:"failure notice" OR subject:"Returned mail")';
         const r = await fetch("/api/gmail", { method: "POST", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ action: "list", repEnvKey: "BRAD", query: bounceQuery, maxResults: 200 }) });
+          body: JSON.stringify({ action: "list", asBdr: true, query: bounceQuery, maxResults: 200 }) });
         const d = await r.json();
         const bounceMsgs = (!r.ok || d.error) ? [] : (d.messages || []);
         const newlyBounced = [];
@@ -1304,7 +1311,7 @@ Return JSON exactly as:
             getCallsUsed++;
             try {
               const gr = await fetch("/api/gmail", { method: "POST", headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ action: "get", repEnvKey: "BRAD", messageId: msg.id }) });
+                body: JSON.stringify({ action: "get", asBdr: true, messageId: msg.id }) });
               const gd = await gr.json();
               const fullText = `${gd.subject || ""} ${gd.body || ""}`.toLowerCase();
               matched = [...byEmail.entries()].find(([email]) => fullText.includes(email))?.[1];
@@ -1583,7 +1590,8 @@ Subject: <subject line, may include {{orgName}}>
     const campaign = {
       id: campId, name: campaignName.trim() || `Bulk Outreach — ${nowStr}`,
       product: "Team Stores", audience: "Bulk import", source: "bulk-import",
-      fromBrad: true, // send-batches.js sends as brad@shopst1sports.com when set
+      fromBrad: true, // send-batches.js sends from this rep's BDR (Settings → My BDR)
+      bdrRepId: cu?.id || "",
       repId: "", startDate: nowStr, touches, enrollments,
       scheduledBatches, sentBatches: {},
       batchSize: Math.max(1, Number(batchSize) || 25),
@@ -2093,6 +2101,14 @@ Subject: <subject line, may include {{orgName}}>
             </div>
           )}
 
+          {bdrInfo && (!myBdr || !bdrInfo.connection) && (
+            <div style={{ background: `${B.orange}12`, border: `1px solid ${B.orange}`, borderRadius: 6, padding: "10px 14px", marginBottom: 12, fontSize: 12, color: B.text, lineHeight: 1.5 }}>
+              {!myBdr
+                ? <>You don’t have a BDR yet, so nothing can send from here. Set one up in <a href="/settings" onClick={e => { if (setMod) { e.preventDefault(); setMod("settings"); } }} style={{ color: B.orange, fontWeight: 600 }}>Settings → My BDR</a>.</>
+                : <>{myBdr.name}’s mailbox ({myBdr.email}) isn’t connected. Connect it in <a href="/settings" onClick={e => { if (setMod) { e.preventDefault(); setMod("settings"); } }} style={{ color: B.orange, fontWeight: 600 }}>Settings → My BDR</a> before you GO.</>}
+            </div>
+          )}
+
           <GoPanel
             readyCount={goReady.length}
             pace={goPace}
@@ -2106,6 +2122,7 @@ Subject: <subject line, may include {{orgName}}>
             stepIndices={stepIndices.length ? stepIndices : [0]}
             goStep={goStep}
             setGoStep={setGoStep}
+            bdr={myBdr}
           />
 
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12, flexWrap: "wrap", gap: 10 }}>
