@@ -4,17 +4,15 @@
  * Propose-then-confirm invoice flow for Zoho Books.
  *
  * Actions:
- *   draft   — fetch deal + quote from Zoho CRM → resolve/create Books contact
- *             → POST invoice (DRAFT) → write DealInvoice row → return for review
+ *   draft   — resolve Books customer (exact match only) → map quote lines →
+ *             POST invoice (DRAFT) or return the existing one for that quote number
  *   confirm — send invoice in Zoho Books → update local DealInvoice to SENT
  *   status  — return current DealInvoice + live Zoho Books status
+ *   audit   — dry-run list of API invoices with the generic fallback line or no
+ *             reference_number (never deletes)
  *
- * api/webhooks/zoho.js calls action:'draft' (dryRun: false) directly when a
- * deal closes won — it extracts the CRM fields itself rather than forwarding
- * the raw webhook payload here.
- *
- * dryRun: true (default) returns a preview without writing to Zoho Books or DB.
- * Requires the internal secret (see api/_lib/internalAuth.js) once configured.
+ * api/webhooks/zoho.js, Closed Won in RevOps, Finance, chat, and Order Manager
+ * all call action:'draft' so they share customer / line / idempotency guards.
  */
 
 import { setCors }                       from '../../_lib/cors.js'
@@ -24,13 +22,17 @@ import { booksGet, booksPost,
          isPrismaTableMissing }          from '../../_lib/zoho-books.js'
 import { requireInternalSecret }        from '../../_lib/internalAuth.js'
 import { bindCaller, requireCaller } from '../../_lib/agentGate.js'
+import {
+  CustomerResolutionError,
+  LineMappingError,
+  createGuardedInvoice,
+  recordInvoiceSyncFailure,
+  listBogusApiInvoices,
+} from '../../_lib/booksInvoice.js'
 
 export const config = { api: { bodyParser: { sizeLimit: '1mb' } } }
 
-const CRM   = 'https://www.zohoapis.com/crm/v3'
-const NET30 = 30   // default payment terms in days
-
-// ── CRM helpers ───────────────────────────────────────────────────────────────
+const CRM = 'https://www.zohoapis.com/crm/v3'
 
 async function crmGet(path) {
   const token = await getZohoToken()
@@ -45,202 +47,83 @@ async function crmGet(path) {
 }
 
 async function fetchDeal(dealId) {
-  const data = await crmGet(`/Deals/${dealId}?fields=Deal_Name,Account_Name,Amount,PO_Number,Contact_Email,Email,Owner`)
+  const data = await crmGet(`/Deals/${dealId}?fields=Deal_Name,Account_Name,Amount,PO_Number,Contact_Email,Email,Owner,Description`)
   return data.data?.[0] || null
 }
 
 async function fetchLinkedQuote(dealId) {
   try {
-    const data = await crmGet(`/Deals/${dealId}/Quotes?fields=id,Subject,PO_Number,Product_Details,Grand_Total`)
+    const data = await crmGet(`/Deals/${dealId}/Quotes?fields=id,Subject,Quote_Number,PO_Number,Product_Details,Quoted_Items,Grand_Total,Description,Terms_and_Conditions`)
     const quotes = data.data || []
     if (!quotes.length) return null
-    // Fetch full quote detail for the most recent one
-    const detail = await crmGet(`/Quotes/${quotes[0].id}?fields=Subject,PO_Number,Product_Details,Grand_Total,Account_Name`)
+    const detail = await crmGet(
+      `/Quotes/${quotes[0].id}?fields=Subject,Quote_Number,PO_Number,Product_Details,Quoted_Items,Grand_Total,Account_Name,Description,Terms_and_Conditions`
+    )
     return detail.data?.[0] || null
   } catch {
     return null
   }
 }
 
-// ── Books contact resolver ────────────────────────────────────────────────────
-
-async function resolveContact(accountName, email) {
-  // 1. Search by name
-  if (accountName) {
-    const data = await booksGet(`/contacts?search_text=${encodeURIComponent(accountName)}&contact_type=customer&per_page=5`)
-    if (data.contacts?.length) return data.contacts[0].contact_id
-  }
-  // 2. Search by email
-  if (email) {
-    const data = await booksGet(`/contacts?email=${encodeURIComponent(email)}&contact_type=customer&per_page=5`)
-    if (data.contacts?.length) return data.contacts[0].contact_id
-  }
-  // 3. Create new contact
-  const payload = {
-    contact_name: accountName || email || 'Customer',
-    contact_type: 'customer',
-    ...(email ? { email } : {}),
-  }
-  const created = await booksPost('/contacts', payload)
-  return created.contact?.contact_id || null
+function accountNameOf(deal) {
+  const raw = deal?.Account_Name
+  if (!raw) return ''
+  return typeof raw === 'object' ? (raw.name || '') : String(raw)
 }
 
-// ── Line item builder ─────────────────────────────────────────────────────────
+async function createDraft(params) {
+  let crmQuote = params.crmQuote || null
+  let deal = null
+  let acctName = params.crmAccountName || params.customerName || params.crmDealName || ''
+  let email = params.crmEmail || ''
+  let po = params.poNumber || ''
+  let quoteRef = params.quoteRef || null
+  let quoteNumber = params.quoteNumber || ''
+  let zohoContactId = params.zohoContactId || params.storedContactId || ''
 
-function buildLineItems(edgarQuote, crmQuote, dealAmount) {
-  // Prefer Edgar quote (has verified costs + GM data)
-  if (edgarQuote?.lineItems?.length) {
-    return edgarQuote.lineItems
-      .filter(li => !li.notFound)
-      .map(li => ({
-        name:        li.name || 'Item',
-        description: li.sku  || '',
-        quantity:    Number(li.qty || 1),
-        rate:        Number(li.quotedPrice || 0),
-      }))
-  }
-
-  // Fall back to CRM quote Product_Details
-  const products = crmQuote?.Product_Details || []
-  if (products.length) {
-    return products.map(p => ({
-      name:     p.product?.name || p.Product_Name || 'Item',
-      quantity: Number(p.Quantity || 1),
-      rate:     Number(p.Unit_Price || p.List_Price || 0),
-    }))
-  }
-
-  // Last resort: single line from deal amount
-  return [{ name: 'Athletic Equipment / Services', quantity: 1, rate: Number(dealAmount || 0) }]
-}
-
-// ── DRAFT: propose the invoice ────────────────────────────────────────────────
-
-async function createDraft({ crmDealId, crmDealName, crmAccountName, crmEmail, dealAmount, poNumber, edgarQuote, dryRun = true }) {
-  let acctName  = crmAccountName || crmDealName || 'Customer'
-  let email     = crmEmail || ''
-  let amount    = Number(dealAmount || 0)
-  let po        = poNumber || ''
-  let deal      = null
-  let crmQuote  = null
-  let quoteRef  = null
-
-  if (crmDealId) {
+  if (params.crmDealId) {
     try {
-      deal     = await fetchDeal(crmDealId)
-      acctName = deal.Account_Name?.name || deal.Account_Name || acctName
-      email    = (deal.Contact_Email || deal.Email || email).toLowerCase().trim()
-      amount   = parseFloat(deal.Amount || amount) || 0
-      po       = deal.PO_Number || po
+      deal = await fetchDeal(params.crmDealId)
+      acctName = accountNameOf(deal) || acctName
+      email = (deal?.Contact_Email || deal?.Email || email).toLowerCase().trim()
+      po = deal?.PO_Number || po
     } catch (e) {
       console.warn('[invoice] fetchDeal:', e.message)
     }
-
     try {
-      crmQuote = await fetchLinkedQuote(crmDealId)
+      crmQuote = crmQuote || await fetchLinkedQuote(params.crmDealId)
       if (crmQuote) {
-        po       = crmQuote.PO_Number || po
-        quoteRef = crmQuote.id || null
-        if (!amount) amount = parseFloat(crmQuote.Grand_Total || 0) || 0
+        po = crmQuote.PO_Number || po
+        quoteRef = crmQuote.id || quoteRef
+        quoteNumber = quoteNumber || crmQuote.Quote_Number || ''
       }
-    } catch { /* no linked quote is fine */ }
+    } catch { /* no linked quote is fine — line mapping will fail loudly */ }
   }
 
-  const lineItems   = buildLineItems(edgarQuote, crmQuote, amount)
-  const totalAmount = lineItems.reduce((s, li) => s + li.rate * li.quantity, 0)
-  const today       = new Date().toISOString().split('T')[0]
-  const dueDate     = new Date(Date.now() + NET30 * 86_400_000).toISOString().split('T')[0]
-
-  if (dryRun) {
-    return {
-      ok:      true,
-      dryRun:  true,
-      preview: { customerName: acctName, lineItems, poNumber: po, dueDate, total: totalAmount },
-      message: `Preview only — confirm to create in Zoho Books`,
-    }
+  const input = {
+    ...params,
+    customerName: acctName,
+    crmAccountName: acctName,
+    crmEmail: email,
+    poNumber: po,
+    quoteRef,
+    quoteNumber,
+    zohoContactId,
+    crmQuote,
+    notes: params.notes || crmQuote?.Description || deal?.Description || '',
+    terms: params.terms || crmQuote?.Terms_and_Conditions || '',
+    triggerSource: params.triggerSource || (params.crmDealId ? 'CRM_WEBHOOK' : 'MANUAL'),
   }
 
-  // Idempotency: a re-fired CRM webhook (deal edited again while still Closed
-  // Won, or a redelivery) must not create a second real Zoho Books invoice
-  // for the same deal.
-  if (crmDealId) {
-    try {
-      const existing = await prisma.dealInvoice.findFirst({
-        where: { crmDealId, status: { not: 'VOID' } },
-        orderBy: { createdAt: 'desc' },
-      })
-      if (existing) {
-        return {
-          ok:            true,
-          dryRun:        false,
-          action:        'draft',
-          alreadyExists: true,
-          zohoInvoiceId: existing.zohoInvoiceId,
-          status:        existing.status,
-          customerName:  existing.crmDealName || acctName,
-          total:         existing.amountTotal != null ? Number(existing.amountTotal) : totalAmount,
-          dealInvoiceId: existing.id,
-          reviewUrl:     existing.zohoInvoiceId ? `https://books.zoho.com/app#/invoices/${existing.zohoInvoiceId}` : null,
-          message:       `Deal ${crmDealId} already has an invoice (${existing.status}) — not creating another`,
-        }
-      }
-    } catch (e) {
-      if (!isPrismaTableMissing(e)) throw e
-    }
-  }
-
-  const contactId = await resolveContact(acctName, email)
-
-  const invoicePayload = {
-    customer_id:      contactId,
-    date:             today,
-    due_date:         dueDate,
-    payment_terms:    NET30,
-    ...(po ? { reference_number: po } : {}),
-    line_items: lineItems,
-  }
-
-  const invoiceData = await booksPost('/invoices', invoicePayload)
-  const inv = invoiceData.invoice || {}
-
-  let dealInvoiceId = null
   try {
-    const row = await prisma.dealInvoice.create({
-      data: {
-        crmDealId:     crmDealId   || `manual-${Date.now()}`,
-        crmDealName:   crmDealName || acctName,
-        zohoInvoiceId: inv.invoice_id || null,
-        quoteRef:      quoteRef || null,
-        poNumber:      po || null,
-        status:        'DRAFT',
-        amountTotal:   inv.total ?? totalAmount,
-        dueDate:       new Date(dueDate),
-        triggerSource: crmDealId ? 'CRM_WEBHOOK' : 'MANUAL',
-      },
-    })
-    dealInvoiceId = row.id
-  } catch (e) {
-    if (!isPrismaTableMissing(e)) throw e
-    console.warn('[invoice] DealInvoice table not migrated — skipping DB write')
-  }
-
-  return {
-    ok:            true,
-    dryRun:        false,
-    action:        'draft',
-    zohoInvoiceId: inv.invoice_id    || null,
-    invoiceNumber: inv.invoice_number || null,
-    status:        'DRAFT',
-    customerName:  acctName,
-    total:         inv.total ?? totalAmount,
-    dueDate,
-    dealInvoiceId,
-    reviewUrl:     inv.invoice_id ? `https://books.zoho.com/app#/invoices/${inv.invoice_id}` : null,
-    message:       `Invoice ${inv.invoice_number || inv.invoice_id} created as DRAFT — click Send to deliver to customer`,
+    return await createGuardedInvoice(input, { booksGet, booksPost, prisma })
+  } catch (err) {
+    if (err instanceof CustomerResolutionError || err instanceof LineMappingError) {
+      await recordInvoiceSyncFailure(prisma, input, err)
+    }
+    throw err
   }
 }
-
-// ── CONFIRM: send the invoice ─────────────────────────────────────────────────
 
 async function confirmAndSend(dealInvoiceId) {
   let local
@@ -256,10 +139,9 @@ async function confirmAndSend(dealInvoiceId) {
   if (!local.zohoInvoiceId) throw new Error('No Zoho invoice ID — cannot send')
   if (local.status === 'SENT') return { ok: true, status: 'SENT', message: 'Already sent', dealInvoiceId, zohoInvoiceId: local.zohoInvoiceId }
 
-  // Trigger Zoho Books "submit for approval" / email send
   await booksPost(`/invoices/${local.zohoInvoiceId}/email`, {
     send_from_org_email_id: true,
-    to_mail_ids: [],   // Books uses the contact's email
+    to_mail_ids: [],
   })
 
   await prisma.dealInvoice.update({
@@ -276,8 +158,6 @@ async function confirmAndSend(dealInvoiceId) {
     message:       'Invoice sent to customer',
   }
 }
-
-// ── STATUS check ──────────────────────────────────────────────────────────────
 
 async function getInvoiceStatus(dealInvoiceId) {
   try {
@@ -301,6 +181,8 @@ async function getInvoiceStatus(dealInvoiceId) {
       amountTotal:   local.amountTotal != null ? Number(local.amountTotal) : null,
       dueDate:       local.dueDate?.toISOString().split('T')[0] || null,
       crmDealName:   local.crmDealName,
+      quoteNumber:   local.quoteNumber,
+      syncError:     local.syncError,
     }
   } catch (e) {
     if (isPrismaTableMissing(e)) {
@@ -310,12 +192,9 @@ async function getInvoiceStatus(dealInvoiceId) {
   }
 }
 
-// ── Main handler ──────────────────────────────────────────────────────────────
-
 export default async function handler(req, res) {
   setCors(res, 'POST, OPTIONS')
   if (req.method === 'OPTIONS') return res.status(200).end()
-  // Agents spend model credits and read company data: signed-in reps (or this deployment's server jobs).
   if (!bindCaller(await requireCaller(req, res))) return
   if (req.method !== 'POST')   return res.status(405).json({ error: 'POST only' })
   if (!requireInternalSecret(req, res)) return
@@ -341,10 +220,29 @@ export default async function handler(req, res) {
       return res.json(result)
     }
 
+    if (action === 'audit') {
+      const flagged = await listBogusApiInvoices(booksGet)
+      return res.json({
+        ok: true,
+        dryRun: true,
+        count: flagged.length,
+        invoices: flagged,
+        message: flagged.length
+          ? `Found ${flagged.length} API invoice(s) with no reference_number or a generic Athletic Equipment / Services line. Nothing was deleted.`
+          : 'No matching API invoices found.',
+      })
+    }
+
     return res.status(400).json({ error: `Unknown action: ${action}` })
 
   } catch (err) {
     console.error('[invoice]', err.message)
-    return res.status(500).json({ ok: false, error: err.message })
+    const status = (err instanceof CustomerResolutionError || err instanceof LineMappingError) ? 422 : 500
+    return res.status(status).json({
+      ok: false,
+      error: err.message,
+      code: err.code || null,
+      invoiceSyncFailed: !!err.invoiceSyncFailed,
+    })
   }
 }

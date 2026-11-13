@@ -589,9 +589,12 @@ model DealInvoice {
   crmDealId     String
   crmDealName   String?
   quoteRef      String?
+  quoteNumber   String?
   poNumber      String?
   zohoInvoiceId String?  @unique
-  status        String   @default("DRAFT")      // DRAFT | SENT | PARTIAL | PAID | OVERDUE | VOID
+  zohoContactId String?
+  status        String   @default("DRAFT")      // DRAFT | SENT | PARTIAL | PAID | OVERDUE | VOID | INVOICE_SYNC_FAILED
+  syncError     String?
   amountTotal   Decimal? @db.Decimal(12, 2)
   amountPaid    Decimal? @db.Decimal(12, 2)
   dueDate       DateTime?
@@ -600,6 +603,7 @@ model DealInvoice {
   updatedAt     DateTime @updatedAt
 
   @@index([crmDealId])
+  @@index([quoteNumber])
   @@index([status])
 }
 

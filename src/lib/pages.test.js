@@ -31,3 +31,13 @@ describe('removed social and ad hub routes', () => {
     assert.equal(KNOWN_MODS.has('cc-sales-copy'), true);
   });
 });
+
+describe('removed finance tab', () => {
+  it('no longer treats finance as its own module', () => {
+    assert.equal(KNOWN_MODS.has('finance'), false);
+  });
+
+  it('sends old /finance bookmarks to Home', () => {
+    assert.equal(pathToMod('/finance'), 'briefing');
+  });
+});
