@@ -4,16 +4,12 @@
  * Schedule: every 30 minutes.
  */
 import { syncAllConnections } from '../_lib/radar/sync.js';
+import { requireCronSecret } from '../_lib/requireSignedIn.js';
 
 export const config = { maxDuration: 300 };
 
 export default async function handler(req, res) {
-  // Fails closed: this job reads every connected inbox and spends on model calls.
-  const cronSecret = process.env.CRON_SECRET;
-  if (!cronSecret) return res.status(503).json({ error: 'CRON_SECRET is not configured' });
-  if ((req.headers.authorization || '') !== `Bearer ${cronSecret}`) {
-    return res.status(401).json({ error: 'Unauthorized' });
-  }
+  if (!requireCronSecret(req, res)) return;
 
   const result = await syncAllConnections();
   console.log('[cron/radar-sync]', JSON.stringify(result.results?.map(r => ({ userId: r.userId, ok: r.ok, stats: r.stats }))));

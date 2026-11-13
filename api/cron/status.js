@@ -9,10 +9,12 @@
 
 import { setCors } from '../_lib/cors.js';
 import { prisma } from '../_lib/prisma.js';
+import { requireCronOrCaller } from '../_lib/requireSignedIn.js'
 
 export default async function handler(req, res) {
   setCors(res);
   if (req.method === 'OPTIONS') return res.status(200).end();
+  if (!(await requireCronOrCaller(req, res))) return
 
   const action = req.method === 'POST' ? (req.body?.action || 'status') : 'status';
 

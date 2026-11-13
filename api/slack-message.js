@@ -10,6 +10,7 @@ import {
 } from './_lib/slack.js';
 import { replayFailedBradSlack } from './_lib/bradSlackReplay.js';
 import { prisma } from './_lib/prisma.js';
+import { requireSignedIn } from './_lib/requireSignedIn.js'
 
 export const config = { api: { bodyParser: { sizeLimit: '100kb' } } };
 
@@ -59,6 +60,7 @@ async function slackStatus() {
 export default async function handler(req, res) {
   setCors(res, 'GET, POST, OPTIONS');
   if (req.method === 'OPTIONS') return res.status(200).end();
+  if (!(await requireSignedIn(req, res))) return
 
   if (req.method === 'GET' || req.body?.action === 'status') {
     try {

@@ -13,12 +13,14 @@
 import { setCors } from './_lib/cors.js';
 import { prisma } from './_lib/prisma.js';
 import { sendSms, normalizePhone } from './_lib/twilio.js';
+import { requireSignedIn } from './_lib/requireSignedIn.js'
 
 const OPT_OUT_FOOTER = "\n\nReply STOP to opt out.";
 
 export default async function handler(req, res) {
   setCors(res, 'GET, POST, OPTIONS');
   if (req.method === 'OPTIONS') return res.status(200).end();
+  if (!(await requireSignedIn(req, res))) return
 
   if (req.method === 'GET') {
     const phone = normalizePhone(req.query?.phone || '');

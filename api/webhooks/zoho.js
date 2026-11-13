@@ -10,12 +10,11 @@ export default async function handler(req, res) {
   if (req.method === 'OPTIONS') return res.status(200).end();
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
 
-  // Validate shared secret
+  // Validate shared secret — fail closed, otherwise anyone can POST Closed Won.
   const secret = process.env.ZOHO_WEBHOOK_SECRET;
-  if (secret) {
-    const incoming = req.headers['x-webhook-secret'] || req.query.secret;
-    if (incoming !== secret) return res.status(401).json({ error: 'Invalid webhook secret' });
-  }
+  if (!secret) return res.status(503).json({ error: 'ZOHO_WEBHOOK_SECRET is not configured' });
+  const incoming = req.headers['x-webhook-secret'] || req.query.secret;
+  if (incoming !== secret) return res.status(401).json({ error: 'Invalid webhook secret' });
 
   try {
     const body = req.body || {};

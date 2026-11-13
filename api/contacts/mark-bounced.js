@@ -17,10 +17,12 @@ import { prisma } from '../_lib/prisma.js';
 import { setCors } from '../_lib/cors.js';
 import { getZohoToken } from '../_lib/zoho-token.js';
 import { CRM_BASE, zohoCrmHeaders } from '../_lib/zohoCrm.js';
+import { requireSignedIn } from '../_lib/requireSignedIn.js'
 
 export default async function handler(req, res) {
   setCors(res, 'POST, OPTIONS');
   if (req.method === 'OPTIONS') return res.status(200).end();
+  if (!(await requireSignedIn(req, res))) return
   if (req.method !== 'POST') return res.status(405).json({ error: 'POST only' });
 
   const { email } = req.body || {};

@@ -48,6 +48,7 @@ import { booksGet }     from '../_lib/zoho-books.js'
 import { findOrCreateZohoAccount } from '../_lib/zohoAccount.js'
 import { upsertZohoRecord } from '../_lib/zohoCrm.js'
 import { schoolCoreName, looseSchoolNameMatch } from '../../src/lib/quoteCrmLink.js'
+import { requireSignedIn } from '../_lib/requireSignedIn.js'
 
 const BOOKS_BASE = 'https://www.zohoapis.com/books/v3'
 
@@ -69,6 +70,7 @@ async function fetchAllInvoices(headers) {
 export default async function handler(req, res) {
   setCors(res)
   if (req.method === 'OPTIONS') return res.status(200).end()
+  if (!(await requireSignedIn(req, res))) return
   if (req.method !== 'POST')   return res.status(405).json({ error: 'POST only' })
 
   const dryRun = req.body?.dryRun === true

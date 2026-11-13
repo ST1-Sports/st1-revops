@@ -13,8 +13,8 @@
  *   mute_keyword    — add keyword to mute list; ephemeral if no keyword detected
  *
  * Security: verifies Slack request signature using SLACK_SIGNING_SECRET.
- * Set SLACK_SIGNING_SECRET in env. If unset, signature verification is skipped
- * (dev only — never skip in production).
+ * Requests are rejected when the signing secret is missing or the signature
+ * does not match.
  *
  * Slack expects a 200 response within 3 seconds. We ack immediately and process
  * async, then update the original message via response_url.
@@ -52,7 +52,7 @@ async function getRawBody(req) {
 
 /**
  * Verify the Slack request signature.
- * Returns true if valid (or if SLACK_SIGNING_SECRET is not set).
+ * Returns true if the Slack signature is valid. Missing secret → false.
  *
  * @param {import('http').IncomingMessage} req
  * @param {string} rawBody
@@ -61,8 +61,8 @@ async function getRawBody(req) {
 function verifySignature(req, rawBody) {
   const secret = process.env.SLACK_SIGNING_SECRET;
   if (!secret) {
-    console.warn('[slack/actions] SLACK_SIGNING_SECRET not set — skipping signature verification');
-    return true;
+    console.warn('[slack/actions] SLACK_SIGNING_SECRET is not configured');
+    return false;
   }
 
   const timestamp = req.headers['x-slack-request-timestamp'];

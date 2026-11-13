@@ -1,4 +1,5 @@
 import { setCors } from '../_lib/cors.js';
+import { requireSignedIn } from '../_lib/requireSignedIn.js'
 
 export const config = { api: { bodyParser: false } };
 
@@ -46,6 +47,7 @@ async function gtmGet(path) {
 export default async function handler(req, res) {
   setCors(res, 'GET, OPTIONS');
   if (req.method === 'OPTIONS') return res.status(200).end();
+  if (!(await requireSignedIn(req, res))) return
   if (req.method !== 'GET') return res.status(405).json({ error: 'Method not allowed' });
 
   const c = creds();

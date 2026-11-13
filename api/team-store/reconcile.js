@@ -18,6 +18,7 @@ import { prisma } from '../_lib/prisma.js';
 import { setCors } from '../_lib/cors.js';
 import { fetchStripeChargesNormalized, fetchStripePayoutsNormalized, fetchOperatingAccountDebitsNormalized } from '../_lib/teamStoreReconcileSources.js';
 import { matchOrdersToCharges, summarizeMoneyIn, matchPaymentsToSettledTransactions, confidenceLabel, matchesToReject } from '../../src/lib/teamStoreReconcile.js';
+import { requireSignedIn } from '../_lib/requireSignedIn.js'
 
 const DEFAULT_WINDOW_DAYS = 60;
 
@@ -149,6 +150,7 @@ async function proposeMoneyOut(since, until) {
 export default async function handler(req, res) {
   setCors(res, 'GET, POST, OPTIONS');
   if (req.method === 'OPTIONS') return res.status(200).end();
+  if (!(await requireSignedIn(req, res))) return
 
   try {
     if (req.method === 'POST') {

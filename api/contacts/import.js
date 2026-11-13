@@ -20,6 +20,7 @@ import { setCors } from '../_lib/cors.js'
 import { prisma }  from '../_lib/prisma.js'
 import { normalizeStateForStorage } from '../_lib/stateUtils.js'
 import { upsertAccountForContact, accountDedupKey } from '../_lib/accountUtils.js'
+import { requireSignedIn } from '../_lib/requireSignedIn.js'
 
 export const config = { api: { bodyParser: { sizeLimit: '2mb' } } }
 
@@ -48,6 +49,7 @@ function buildNotes(c) {
 export default async function handler(req, res) {
   setCors(res)
   if (req.method === 'OPTIONS') return res.status(200).end()
+  if (!(await requireSignedIn(req, res))) return
   if (req.method !== 'POST')   return res.status(405).json({ error: 'POST only' })
 
   const { contacts } = req.body || {}

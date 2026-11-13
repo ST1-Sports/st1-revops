@@ -11,6 +11,7 @@
 import { setCors } from '../_lib/cors.js'
 import { prisma }  from '../_lib/prisma.js'
 import { STATE_NAMES, normalizeStateForStorage } from '../_lib/stateUtils.js'
+import { requireSignedIn } from '../_lib/requireSignedIn.js'
 
 const STATE_ABBRS = Object.keys(STATE_NAMES)
 
@@ -55,6 +56,7 @@ function extractStateFromCity(city) {
 export default async function handler(req, res) {
   setCors(res)
   if (req.method === 'OPTIONS') return res.status(200).end()
+  if (!(await requireSignedIn(req, res))) return
   if (req.method !== 'POST') return res.status(405).json({ error: 'POST only' })
 
   const dryRun = req.body?.dryRun === true

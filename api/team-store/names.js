@@ -6,10 +6,12 @@
  */
 import { prisma } from '../_lib/prisma.js';
 import { setCors } from '../_lib/cors.js';
+import { requireSignedIn } from '../_lib/requireSignedIn.js'
 
 export default async function handler(req, res) {
   setCors(res, 'GET, OPTIONS');
   if (req.method === 'OPTIONS') return res.status(200).end();
+  if (!(await requireSignedIn(req, res))) return
   if (req.method !== 'GET') return res.status(405).json({ error: 'GET only' });
 
   try {

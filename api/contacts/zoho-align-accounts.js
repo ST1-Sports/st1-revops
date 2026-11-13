@@ -40,6 +40,7 @@ import { ACCOUNT_SPORTS, COACH_ROLES, resolveSport, inferRoleFromTitle } from '.
 import { normalizeAccountName } from '../_lib/accountUtils.js'
 import { findOrCreateZohoAccount } from '../_lib/zohoAccount.js'
 import { upsertZohoRecord, INTENT_SCORE_THRESHOLD } from '../_lib/zohoCrm.js'
+import { requireSignedIn } from '../_lib/requireSignedIn.js'
 
 const CRM_BASE   = 'https://www.zohoapis.com/crm/v3'
 const BOOKS_BASE = 'https://www.zohoapis.com/books/v3'
@@ -70,6 +71,7 @@ async function ensureField(fieldLabel, pickListValues, headers) {
 export default async function handler(req, res) {
   setCors(res)
   if (req.method === 'OPTIONS') return res.status(200).end()
+  if (!(await requireSignedIn(req, res))) return
   if (req.method !== 'POST')   return res.status(405).json({ error: 'Method not allowed' })
 
   const dryRun = req.body?.dryRun === true

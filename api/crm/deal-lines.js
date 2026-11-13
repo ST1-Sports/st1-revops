@@ -13,10 +13,12 @@ import { zohoCrmHeaders } from '../_lib/zohoCrm.js'
 import { findOrCreateZohoAccount } from '../_lib/zohoAccount.js'
 import { filledQuoteLines } from '../../src/lib/quoteLines.js'
 import { fetchDealQuoteLines, writeDealQuoteLines } from '../_lib/zohoQuoteLines.js'
+import { requireSignedIn } from '../_lib/requireSignedIn.js'
 
 export default async function handler(req, res) {
   setCors(res, 'GET, POST, PUT, OPTIONS')
   if (req.method === 'OPTIONS') return res.status(200).end()
+  if (!(await requireSignedIn(req, res))) return
   if (req.method !== 'GET' && req.method !== 'POST' && req.method !== 'PUT') {
     return res.status(405).json({ error: 'GET or POST only' })
   }

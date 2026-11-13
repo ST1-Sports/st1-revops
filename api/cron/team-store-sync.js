@@ -7,17 +7,12 @@
  */
 
 import { runSync } from '../_lib/teamStoreSync.js';
+import { requireCronSecret } from '../_lib/requireSignedIn.js';
 
 export const config = { api: { bodyParser: false } };
 
 export default async function handler(req, res) {
-  const cronSecret = process.env.CRON_SECRET;
-  if (cronSecret) {
-    const authHeader = req.headers['authorization'] || '';
-    if (authHeader !== `Bearer ${cronSecret}`) {
-      return res.status(401).json({ error: 'Unauthorized' });
-    }
-  }
+  if (!requireCronSecret(req, res)) return;
   if (req.method !== 'GET' && req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' });
   }

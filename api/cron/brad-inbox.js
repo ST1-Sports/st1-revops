@@ -19,6 +19,7 @@ import { prisma }  from '../_lib/prisma.js'
 import { classifyEmailIntent, pickRep, notifyBradSlack, parseAddr, promoteContactToZoho } from '../_lib/brad-shared.js'
 import { handOffBradReply } from '../_lib/radar/brad.js'
 import { replayFailedBradSlack, canSendBradSlack } from '../_lib/bradSlackReplay.js'
+import { requireCronOrCaller } from '../_lib/requireSignedIn.js'
 
 const GMAIL_BASE = 'https://gmail.googleapis.com/gmail/v1/users/me'
 
@@ -160,6 +161,7 @@ async function pollInbox(host) {
 export default async function handler(req, res) {
   setCors(res, 'GET, POST, OPTIONS')
   if (req.method === 'OPTIONS') return res.status(200).end()
+  if (!(await requireCronOrCaller(req, res))) return
   if (req.method !== 'GET' && req.method !== 'POST') return res.status(405).end()
 
   try {

@@ -24,6 +24,7 @@ import { zohoCrmHeaders, CRM_BASE } from '../_lib/zohoCrm.js'
 import { findOrCreateZohoAccount } from '../_lib/zohoAccount.js'
 import { booksGet } from '../_lib/zoho-books.js'
 import { requireInternalSecret } from '../_lib/internalAuth.js'
+import { requireSignedIn } from '../_lib/requireSignedIn.js'
 
 async function fetchAllInvoices() {
   let all = [], page = 1
@@ -83,6 +84,7 @@ function summarizeItems(lineItems) {
 export default async function handler(req, res) {
   setCors(res)
   if (req.method === 'OPTIONS') return res.status(200).end()
+  if (!(await requireSignedIn(req, res))) return
   if (req.method !== 'POST')   return res.status(405).json({ error: 'POST only' })
   if (!requireInternalSecret(req, res)) return
 

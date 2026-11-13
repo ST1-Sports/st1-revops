@@ -10,10 +10,12 @@ import { prisma }  from './_lib/prisma.js'
 import { notifyBradSlack } from './_lib/brad-shared.js'
 import { handOffBradReply } from './_lib/radar/brad.js'
 import { isBradFollowUpReply } from './_lib/junkReply.js'
+import { requireSignedIn } from './_lib/requireSignedIn.js'
 
 export default async function handler(req, res) {
   setCors(res, 'GET, POST, OPTIONS')
   if (req.method === 'OPTIONS') return res.status(200).end()
+  if (!(await requireSignedIn(req, res))) return
 
   if (req.method === 'GET') {
     try {

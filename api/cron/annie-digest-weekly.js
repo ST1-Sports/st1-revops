@@ -7,15 +7,10 @@
  */
 
 import { runWeeklyDigest } from '../agents/annie/digest.js'
+import { requireCronSecret } from '../_lib/requireSignedIn.js'
 
 export default async function handler(req, res) {
-  const cronSecret = process.env.CRON_SECRET
-  if (cronSecret) {
-    const auth = req.headers.authorization || ''
-    if (auth !== `Bearer ${cronSecret}`) {
-      return res.status(401).json({ error: 'Unauthorized' })
-    }
-  }
+  if (!requireCronSecret(req, res)) return
 
   // In-process: the digest's HTTP endpoint is admin-only.
   const data = await runWeeklyDigest({ dryRun: false })

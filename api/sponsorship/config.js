@@ -5,6 +5,7 @@
 
 import { prisma }   from '../_lib/prisma.js';
 import { setCors }  from '../_lib/cors.js';
+import { requireSignedIn } from '../_lib/requireSignedIn.js'
 
 const DEFAULTS = {
   avgOrderValuePerAthlete:    85,
@@ -20,6 +21,7 @@ const DEFAULTS = {
 export default async function handler(req, res) {
   setCors(res, 'GET, PATCH, OPTIONS');
   if (req.method === 'OPTIONS') return res.status(200).end();
+  if (!(await requireSignedIn(req, res))) return
 
   // ── GET ──────────────────────────────────────────────────────────────────
   if (req.method === 'GET') {
