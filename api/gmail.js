@@ -2,8 +2,8 @@
  * /api/gmail  — Gmail API proxy (read-only inbox access + send)
  *
  * Required env vars:
- *   GMAIL_CLIENT_ID, GMAIL_CLIENT_SECRET, GMAIL_REFRESH_TOKEN
- *   (get them from /api/gmail-setup)
+ *   GMAIL_CLIENT_ID, GMAIL_CLIENT_SECRET. Mailboxes are connected in Settings → Email Status
+ *   (company mailbox) and Settings → My BDR; GMAIL_REFRESH_TOKEN is only a fallback.
  *
  * For per-rep sending, tokens are stored in the database (Setting model).
  * Falls back to GMAIL_REFRESH_TOKEN_{REPKEY} env var for backwards compat.
@@ -18,6 +18,7 @@
 
 import { prisma } from './_lib/prisma.js';
 import { connectedRefreshTokenForKey, normalizeGmailKey } from './_lib/repGmailToken.js';
+import { companyRefreshToken } from './_lib/companyMailbox.js';
 import { readRep } from './_lib/session.js';
 import { classifyEmailIntent } from './_lib/brad-shared.js';
 import { encodeMimeWord, encodeMailbox, encodeFilename } from './_lib/mimeHeader.js';
@@ -39,9 +40,9 @@ async function getToken(repEnvKey = "") {
     throw new Error("Gmail not configured — set GMAIL_CLIENT_ID and GMAIL_CLIENT_SECRET in Vercel env vars");
   }
 
-  // Look up refresh token: the rep's Google sign-in connection, then the older per-rep
-  // database token, then env var (backwards compat).
-  let refreshToken = repEnvKey ? await connectedRefreshTokenForKey(repEnvKey) : null;
+  // Look up refresh token: the rep's Google sign-in connection (or BDR / company mailbox
+  // connected in Settings), then the older per-rep database token, then env var (backwards compat).
+  let refreshToken = repEnvKey ? await connectedRefreshTokenForKey(repEnvKey) : await companyRefreshToken();
   if (repEnvKey && !refreshToken) {
     try {
       const dbKey = `gmail_token_${repEnvKey.toUpperCase().replace(/[^A-Z0-9]/g, "_")}`;
@@ -56,7 +57,7 @@ async function getToken(repEnvKey = "") {
     refreshToken = process.env[refreshTokenVar];
     if (!refreshToken) {
       if (repEnvKey) throw new Error(`Gmail not connected for "${repEnvKey}" — have that rep sign in with Google`);
-      throw new Error("Gmail not configured — visit /api/gmail-setup");
+      throw new Error("Company mailbox not connected — an admin can connect it in Settings → Email Status");
     }
   }
 
@@ -401,6 +402,6 @@ export default async function handler(req, res) {
     return res.status(400).json({ error: `Unknown action: ${action}` });
 
   } catch(err) {
-    return res.status(500).json({ error: err.message, setup: "/api/gmail-setup" });
+    return res.status(500).json({ error: err.message, setup: "/settings" });
   }
 }

@@ -9,9 +9,9 @@
  *   (InboxConnection), retires the rep's old unencrypted Gmail token, and returns to the app
  *   with a signed session in the URL fragment (never sent to a server or logged).
  *
- * The same callback also finishes "Connect BDR mailbox" (Settings → My BDR): that flow is started
- * by POST /api/bdr {action:"connect"}, carries purpose "bdr" in the signed state, and stores the
- * BDR mailbox's token instead of signing anyone in.
+ * The same callback also finishes connecting a mailbox from Settings, without signing anyone in:
+ *   purpose "bdr"     — a rep's BDR mailbox (Settings → My BDR, started by POST /api/bdr)
+ *   purpose "company" — the company sender (Settings → Email Status, started by POST /api/mailboxes)
  *
  * Redirect URI to register on the Google OAuth client (consent screen: Internal):
  *   https://revops.st1sports.com/api/auth/google
@@ -23,6 +23,7 @@ import { issueSessionToken, signPayload, verifyPayload } from '../_lib/session.j
 import { upsertRepForEmail } from '../_lib/repAccount.js';
 import { GOOGLE_LOGIN_SCOPES, allowedGoogleEmail, grantedGmail, loginRedirect } from '../_lib/googleLogin.js';
 import { BDR_SCOPES, BDR_GMAIL_SCOPES, loadBdrForRep, normalizeEmail, saveBdrConnection } from '../_lib/bdr.js';
+import { saveCompanyConnection } from '../_lib/companyMailbox.js';
 
 const NONCE_COOKIE = 'st1_google_nonce';
 const STATE_TTL_MS = 10 * 60 * 1000;
@@ -72,13 +73,13 @@ function startUrl(req, res, { consent }) {
 }
 
 /**
- * Google URL for connecting a rep's BDR mailbox. Called from a signed-in request (api/bdr.js);
- * sets the same nonce cookie as sign-in so the callback only completes in this browser.
+ * Google URL for connecting a mailbox from Settings. Called from a signed-in request; sets the
+ * same nonce cookie as sign-in so the callback only completes in this browser.
  */
-export function bdrConnectUrl(req, res, { repId, email, by }) {
+function mailboxConnectUrl(req, res, { purpose, repId = null, email = '', by }) {
   const nonce = crypto.randomBytes(18).toString('base64url');
   const state = signPayload('google-login', {
-    nonce, purpose: 'bdr', repId, email: normalizeEmail(email), by: by || repId, exp: Date.now() + STATE_TTL_MS,
+    nonce, purpose, repId, email: normalizeEmail(email), by: by || repId, exp: Date.now() + STATE_TTL_MS,
   });
   if (!state) return null;
   const auth = new URL('https://accounts.google.com/o/oauth2/v2/auth');
@@ -89,15 +90,29 @@ export function bdrConnectUrl(req, res, { repId, email, by }) {
   auth.searchParams.set('access_type', 'offline');
   // Always consent so Google issues a fresh refresh token for the BDR mailbox.
   auth.searchParams.set('prompt', 'consent select_account');
-  auth.searchParams.set('login_hint', normalizeEmail(email));
+  if (email) auth.searchParams.set('login_hint', normalizeEmail(email));
   auth.searchParams.set('state', state);
   res.setHeader('Set-Cookie', nonceCookie(nonce, STATE_TTL_MS / 1000));
   return auth.toString();
 }
 
+/** A rep's BDR mailbox (api/bdr.js). */
+export function bdrConnectUrl(req, res, { repId, email, by }) {
+  return mailboxConnectUrl(req, res, { purpose: 'bdr', repId, email, by });
+}
+
+/** The company sender (api/mailboxes.js, admins only). */
+export function companyConnectUrl(req, res, { by }) {
+  return mailboxConnectUrl(req, res, { purpose: 'company', by });
+}
+
 const bdrDone = (params) => `/settings?${new URLSearchParams(params).toString()}`;
 
-async function finishBdrConnect(req, res, signed, code) {
+async function finishMailboxConnect(req, res, signed, code) {
+  const isCompany = signed.purpose === 'company';
+  const done = (params) => go(res, bdrDone(isCompany
+    ? Object.fromEntries(Object.entries(params).map(([k, v]) => [k.replace(/^bdr/, 'company'), v]))
+    : params));
   try {
     const tokenRes = await fetch('https://oauth2.googleapis.com/token', {
       method: 'POST',
@@ -112,7 +127,7 @@ async function finishBdrConnect(req, res, signed, code) {
       signal: AbortSignal.timeout(10_000),
     });
     const tokens = await tokenRes.json();
-    if (!tokens.access_token) return go(res, bdrDone({ bdr_error: 'google_failed' }));
+    if (!tokens.access_token) return done({ bdr_error: 'google_failed' });
     const info = await fetch('https://openidconnect.googleapis.com/v1/userinfo', {
       headers: { Authorization: `Bearer ${tokens.access_token}` },
       signal: AbortSignal.timeout(10_000),
@@ -120,23 +135,33 @@ async function finishBdrConnect(req, res, signed, code) {
     const email = normalizeEmail(info?.email);
     const verified = !(info?.email_verified === false || info?.email_verified === 'false');
 
+    const granted = new Set(String(tokens.scope || '').split(/\s+/));
+    const allGranted = BDR_GMAIL_SCOPES.every(sc => granted.has(sc));
+
+    if (isCompany) {
+      if (!verified || !email) return done({ bdr_error: 'google_failed' });
+      if (!allGranted) return done({ bdr_error: 'missing_permissions' });
+      if (!tokens.refresh_token) return done({ bdr_error: 'no_refresh_token' });
+      await saveCompanyConnection({ refreshToken: tokens.refresh_token, email, scopes: tokens.scope, connectedBy: signed.by });
+      return done({ bdr: 'connected' });
+    }
+
     // The BDR must still be the one this rep set up, and Google must have signed in as exactly it.
     const bdr = await loadBdrForRep(signed.repId);
-    if (!bdr || bdr.email !== normalizeEmail(signed.email)) return go(res, bdrDone({ bdr_error: 'changed' }));
+    if (!bdr || bdr.email !== normalizeEmail(signed.email)) return done({ bdr_error: 'changed' });
     if (!verified || email !== bdr.email) {
-      return go(res, bdrDone({ bdr_error: 'wrong_account', got: email || 'unknown', want: bdr.email }));
+      return done({ bdr_error: 'wrong_account', got: email || 'unknown', want: bdr.email });
     }
-    const granted = new Set(String(tokens.scope || '').split(/\s+/));
-    if (!BDR_GMAIL_SCOPES.every(sc => granted.has(sc))) return go(res, bdrDone({ bdr_error: 'missing_permissions' }));
-    if (!tokens.refresh_token) return go(res, bdrDone({ bdr_error: 'no_refresh_token' }));
+    if (!allGranted) return done({ bdr_error: 'missing_permissions' });
+    if (!tokens.refresh_token) return done({ bdr_error: 'no_refresh_token' });
 
     await saveBdrConnection(bdr.gmailKey, {
       refreshToken: tokens.refresh_token, email, scopes: tokens.scope, connectedBy: signed.by,
     });
-    return go(res, bdrDone({ bdr: 'connected' }));
+    return done({ bdr: 'connected' });
   } catch (err) {
-    console.error('[auth/google bdr]', err.message);
-    return go(res, bdrDone({ bdr_error: 'google_failed' }));
+    console.error(`[auth/google ${signed.purpose}]`, err.message);
+    return done({ bdr_error: 'google_failed' });
   }
 }
 
@@ -149,8 +174,10 @@ export default async function handler(req, res) {
   const { code, state, error: oauthError } = req.query || {};
   if (!code) {
     if (oauthError) {
-      const wasBdr = verifyPayload('google-login', String(state || ''))?.purpose === 'bdr';
-      return go(res, wasBdr ? bdrDone({ bdr_error: 'google_cancelled' }) : loginRedirect({ login_error: 'google_cancelled' }));
+      const purpose = verifyPayload('google-login', String(state || ''))?.purpose;
+      if (purpose === 'bdr') return go(res, bdrDone({ bdr_error: 'google_cancelled' }));
+      if (purpose === 'company') return go(res, bdrDone({ company_error: 'google_cancelled' }));
+      return go(res, loginRedirect({ login_error: 'google_cancelled' }));
     }
     const url = startUrl(req, res, { consent: req.query?.consent === '1' });
     return url ? go(res, url) : go(res, loginRedirect({ login_error: 'session_key_missing' }));
@@ -166,9 +193,11 @@ export default async function handler(req, res) {
     crypto.timingSafeEqual(Buffer.from(nonce), Buffer.from(signed.nonce));
   res.setHeader('Set-Cookie', nonceCookie('', 0));
   if (!nonceOk) {
-    return go(res, signed?.purpose === 'bdr' ? bdrDone({ bdr_error: 'expired' }) : loginRedirect({ login_error: 'expired' }));
+    if (signed?.purpose === 'bdr') return go(res, bdrDone({ bdr_error: 'expired' }));
+    if (signed?.purpose === 'company') return go(res, bdrDone({ company_error: 'expired' }));
+    return go(res, loginRedirect({ login_error: 'expired' }));
   }
-  if (signed.purpose === 'bdr') return finishBdrConnect(req, res, signed, code);
+  if (signed.purpose === 'bdr' || signed.purpose === 'company') return finishMailboxConnect(req, res, signed, code);
 
   try {
     const tokenRes = await fetch('https://oauth2.googleapis.com/token', {

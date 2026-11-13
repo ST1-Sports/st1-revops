@@ -73,6 +73,7 @@ const BulkOutreachPage = lazy(() => import('./BulkOutreach.jsx'))
 const FollowUpRadarPage = lazy(() => import('./FollowUpRadar.jsx'))
 const RadarInboxCard = lazy(() => import('./RadarInboxCard.jsx'))
 const MyBdrCard = lazy(() => import('./MyBdrCard.jsx'))
+const EmailStatusCard = lazy(() => import('./EmailStatusCard.jsx'))
 const TeamStoreStatementPage = lazy(() => import('./TeamStoreStatement.jsx'))
 const TeamStoreReconcilePage = lazy(() => import('./TeamStoreReconcile.jsx'))
 function usePrefetchPanels() {
@@ -1009,7 +1010,7 @@ if(status.ok) return(
 <button onClick={check} style={{marginLeft:"auto",background:"none",border:"1px solid #bbf7d0",borderRadius:3,padding:"1px 7px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",color:"#15803d",cursor:"pointer"}}>RECHECK</button>
 </div>
 );
-const setupUrl=repKey?"/api/auth/google?consent=1":"/api/gmail-setup";
+const setupUrl=repKey?"/api/auth/google?consent=1":"/settings";
 const fixes={
 network:<>The API server is unreachable. <strong>Try a hard refresh (Ctrl+Shift+R)</strong> — if the problem persists, check that your Vercel deployment is live and the function logs show no build errors.</>,
 setup:<>Gmail not connected. <a href={setupUrl} target="_blank" rel="noreferrer" style={{color:"#b91c1c",fontWeight:600,textDecoration:"none",border:"1px solid #b91c1c",borderRadius:3,padding:"1px 8px",marginLeft:4}}>Connect your Gmail →</a></>,
@@ -13541,9 +13542,6 @@ const {s,dispatch,toast,setMod,cu}=useApp();
 const [ints,setInts]=useState({...(s.integrations||{})});
 const [co,setCo]=useState({...SEED.company,...(s.company||{})});
 const [repForm,setRepForm]=useState(null);
-const [gmailStatus,setGmailStatus]=useState(null);
-const [gmailInfo,setGmailInfo]=useState(null);
-const [gmailChecking,setGmailChecking]=useState(false);
 const testRepEmail=async(rep)=>{
 const fromLabel = rep.gmailEnvKey ? `${rep.gmailEnvKey}'s Gmail` : "shared Gmail";
 if(rep.gmailEnvKey){
@@ -13582,25 +13580,8 @@ if(repForm.id){dispatch("UPDATE_REP",repForm);toast("Rep updated","success");}
 else{dispatch("ADD_REP",{...repForm,id:mkId()});toast("Rep added","success");}
 setRepForm(null);
 };
-const repGmailKey = (cu && !cu.isAdmin && cu?.gmailEnvKey) ? cu.gmailEnvKey : "";
-const checkGmail=async()=>{
-setGmailChecking(true);setGmailInfo(null);
-try{
-const d=await fetch("/api/gmail",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"profile",...(repGmailKey?{repEnvKey:repGmailKey}:{})})}).then(r=>r.json());
-setGmailInfo(d.error?{error:d.error}:{email:d.email});
-}catch(e){setGmailInfo({error:e.message});}
-setGmailChecking(false);
-};
-useEffect(()=>{
-fetch("/api/gmail",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"profile"})})
-.then(r=>r.json()).then(d=>setGmailStatus(!d.error&&(d.email||d.emailAddress||d.profile)))
-.catch(()=>setGmailStatus(false));
-if (cu?.isAdmin) { checkGmail(); }
-},[]);
 if (cu && !cu.isAdmin) {
 const myRep = (s.reps||[]).find(r=>r.id===cu?.id) || cu;
-const myKey = cu?.gmailEnvKey || "";
-const setupUrl = "/api/auth/google?consent=1";
 return (
 <div style={{padding:"22px 26px",maxWidth:600}}>
 <PH title="MY ACCOUNT" sub={`Logged in as ${cu?.name||"you"}`}/>
@@ -13614,16 +13595,7 @@ return (
 ))}
 </div>
 </div>
-<div className="card" style={{padding:16,borderTop:`3px solid ${B.green}`}}>
-<Lbl c={B.green} s={{marginBottom:12}}>My Gmail</Lbl>
-{!myKey ? (
-<div style={{background:`${B.yellow}18`,border:`1px solid ${B.yellow}`,borderRadius:5,padding:"10px 14px",fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text}}>
-No Gmail key assigned to your account. Ask an admin to set your Gmail Key in Settings → Reps, then come back here to connect.
-</div>
-) : (
-<RepGmailConnector repKey={myKey} email={cu?.email||""} name={cu?.name||""} />
-)}
-</div>
+<Suspense fallback={null}><EmailStatusCard/></Suspense>
 <Suspense fallback={null}><RadarInboxCard userId={cu?.id||s.currentUserId} isAdmin={false}/></Suspense>
 <Suspense fallback={null}><MyBdrCard isAdmin={false}/></Suspense>
 </div>
@@ -13650,7 +13622,6 @@ style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B
 <OBtn onClick={save}>SAVE SETTINGS</OBtn>
 </div>
 <Suspense fallback={null}><RadarInboxCard userId={cu?.id||s.currentUserId} isAdmin={!!cu?.isAdmin}/></Suspense>
-<Suspense fallback={null}><MyBdrCard isAdmin={!!cu?.isAdmin}/></Suspense>
 {/* BCC-to-Deal Email Tracking */}
 <div className="card" style={{padding:16,marginBottom:13,borderTop:`3px solid ${B.blue}`}}>
 <Lbl c={B.blue} s={{marginBottom:6}}>BCC-to-Deal Tracking</Lbl>
@@ -13681,46 +13652,9 @@ style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B
 </div>
 <OBtn onClick={save}>SAVE SETTINGS</OBtn>
 </div>
-{/* Email connection status */}
-<div className="card" style={{padding:16,marginBottom:13,borderTop:`3px solid ${B.green}`}}>
-<Lbl c={B.green} s={{marginBottom:12}}>Email Status</Lbl>
-{/* Gmail */}
-<div style={{marginBottom:14}}>
-<div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:6}}>
-<div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.text,letterSpacing:.5}}>GMAIL (outbound email)</div>
-<div style={{display:"flex",gap:5}}>
-<button onClick={checkGmail} disabled={gmailChecking} style={{background:"none",border:`1px solid ${B.border}`,borderRadius:3,padding:"2px 8px",fontSize:9,fontFamily:"'Lexend',sans-serif",color:B.muted,cursor:"pointer"}}>{gmailChecking?"Checking…":"↻ Test"}</button>
-{!repGmailKey&&<button onClick={async()=>{
-const d=await fetch("/api/gmail",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"send",to_email:s.company?.email||"test@example.com",to_name:"ST1 Test",subject:"ST1 RevOps — Gmail test",body:"If you receive this, Gmail sending is working correctly."})}).then(r=>r.json());
-if(d.sent) toast("Test email sent — check your inbox","success");
-else toast("Send failed: "+(d.error||JSON.stringify(d)),"error");
-}} style={{background:B.purple,color:B.white,border:"none",borderRadius:3,padding:"2px 8px",fontSize:9,fontFamily:"'Lexend',sans-serif",cursor:"pointer"}}>✉ Send Test</button>}
-{repGmailKey&&<a href="/api/auth/google?consent=1" style={{background:B.orange,color:B.white,border:"none",borderRadius:3,padding:"2px 8px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",cursor:"pointer",textDecoration:"none"}}>Connect Gmail →</a>}
-</div>
-</div>
-{/* Rep (non-admin) with no gmailEnvKey set */}
-{cu && !cu.isAdmin && !cu?.gmailEnvKey && (
-<div style={{background:`${B.yellow}18`,border:`1px solid ${B.yellow}`,borderRadius:5,padding:"8px 12px",fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text}}>
-No Gmail key assigned. Ask an admin to set your Gmail Key in Settings → Reps, then come back here to connect.
-</div>
-)}
-{gmailInfo&&(
-gmailInfo.error
-?<div style={{background:`${B.red}08`,border:`1px solid ${B.red}30`,borderRadius:5,padding:"8px 12px",fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.red}}>
-✕ {repGmailKey ? "Your Gmail is not connected yet." : `Not connected — ${gmailInfo.error}`}
-{repGmailKey
-?<div style={{marginTop:6,fontSize:10,color:B.muted}}>Click <strong>Connect Gmail →</strong> above to link your Google account. Open it on <strong>your own device</strong> and sign in with your own Google account.</div>
-:<div style={{marginTop:4,fontSize:10,color:B.muted}}>Set GMAIL_CLIENT_ID, GMAIL_CLIENT_SECRET, GMAIL_REFRESH_TOKEN in Vercel env vars. Visit <strong>/api/gmail-setup</strong> to generate tokens.</div>
-}
-</div>
-:<div style={{background:`${B.green}08`,border:`1px solid ${B.green}30`,borderRadius:5,padding:"8px 12px",fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.green}}>
-✓ Connected as <strong>{gmailInfo.email}</strong>
-<div style={{marginTop:4,fontSize:10,color:B.muted}}>{repGmailKey?"Campaign emails assigned to you will send from this account.":"All campaign emails send FROM this account. Rep name & email appear in the signature — replies go back to this inbox."}</div>
-</div>
-)}
-{!gmailInfo&&!gmailChecking&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>Click Test to check connection.</div>}
-</div>
-</div>
+{/* Every mailbox this person relies on, checked live, with connect buttons */}
+<Suspense fallback={null}><EmailStatusCard/></Suspense>
+<Suspense fallback={null}><MyBdrCard isAdmin={!!cu?.isAdmin}/></Suspense>
 {/* Sales Reps */}
 <div className="card" style={{padding:16,marginBottom:13,borderTop:`3px solid ${B.blue}`}}>
 <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>

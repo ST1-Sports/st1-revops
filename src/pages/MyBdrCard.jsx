@@ -90,7 +90,7 @@ export default function MyBdrCard({ isAdmin = false }) {
   const editing = !!form;
 
   return (
-    <div className="card" style={{ padding: 16, marginBottom: 13, borderTop: `3px solid ${B.blue}` }}>
+    <div id="my-bdr" className="card" style={{ padding: 16, marginBottom: 13, borderTop: `3px solid ${B.blue}`, scrollMarginTop: 16 }}>
       <div style={{ fontFamily: "'Lexend Zetta',sans-serif", fontSize: 8, color: B.blue, letterSpacing: 2.5, marginBottom: 10 }}>MY BDR</div>
       <div style={{ fontFamily: "'Lexend',sans-serif", fontSize: 12, color: B.text, marginBottom: 12, lineHeight: 1.5 }}>
         Your own outreach persona with its own mailbox. Bulk Outreach and Brad-style campaigns you send go out from it, and

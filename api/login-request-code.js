@@ -6,8 +6,7 @@
  * here by design, since a first-time login is exactly how someone new (e.g.
  * a rep nobody has added yet) gets in. Generates a 6-digit one-time code,
  * stores only its hash (LoginCode, 10-minute expiry), and emails it via the
- * shared Gmail sender set up at /api/gmail-setup (no repKey — the default,
- * org-wide GMAIL_REFRESH_TOKEN).
+ * company mailbox (Settings → Email Status; GMAIL_REFRESH_TOKEN is the fallback).
  */
 import { prisma } from './_lib/prisma.js';
 import { setCors } from './_lib/cors.js';
@@ -49,10 +48,13 @@ export default async function handler(req, res) {
     return res.json({ ok: true });
   } catch (e) {
     console.error('[login-request-code]', e.message);
-    const notConfigured = /not configured/i.test(e.message);
+    // Not connected, or connected under the old Google app: the fix is the same either way.
+    const mailboxDown = /not configured|not connected|token refresh failed/i.test(e.message);
     return res.status(500).json({
-      error: notConfigured ? 'Login email couldn\'t be sent — Gmail sending isn\'t set up yet.' : e.message,
-      ...(notConfigured ? { setup: '/api/gmail-setup' } : {}),
+      error: mailboxDown
+        ? 'Login email couldn\'t be sent — the company mailbox needs connecting (an admin can do it in Settings → Email Status). Use Sign in with Google for now.'
+        : e.message,
+      ...(mailboxDown ? { setup: '/settings' } : {}),
     });
   }
 }

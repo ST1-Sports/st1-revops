@@ -6,11 +6,12 @@
  * tokens); keeping login's Gmail usage in its own small, simple file means a
  * bug in one can never break the other. Both read the same env vars /
  * Setting rows (GMAIL_CLIENT_ID/SECRET, GMAIL_REFRESH_TOKEN, gmail_token_*),
- * so a Gmail account connected via /api/gmail-setup works for both.
+ * so a mailbox connected in Settings works for both.
  */
 import { prisma } from './prisma.js';
 import { encodeMimeWord } from './mimeHeader.js';
 import { connectedRefreshTokenForKey } from './repGmailToken.js';
+import { companyRefreshToken } from './companyMailbox.js';
 
 const _tokenCache = {};
 
@@ -24,7 +25,8 @@ export async function getGmailAccessToken(repEnvKey = '') {
   }
 
   // The rep's Google sign-in connection first; the older per-rep token is a fallback.
-  let refreshToken = repEnvKey ? await connectedRefreshTokenForKey(repEnvKey) : null;
+  // No key = the company mailbox, connected by an admin in Settings → Email Status.
+  let refreshToken = repEnvKey ? await connectedRefreshTokenForKey(repEnvKey) : await companyRefreshToken();
   if (repEnvKey && !refreshToken) {
     try {
       const dbKey = `gmail_token_${repEnvKey.toUpperCase().replace(/[^A-Z0-9]/g, '_')}`;
@@ -38,7 +40,9 @@ export async function getGmailAccessToken(repEnvKey = '') {
       : 'GMAIL_REFRESH_TOKEN';
     refreshToken = process.env[refreshTokenVar];
     if (!refreshToken) {
-      throw new Error('Gmail not configured — visit /api/gmail-setup to connect a sending account');
+      throw new Error(repEnvKey
+        ? `Gmail not connected for "${repEnvKey}"`
+        : 'Company mailbox not connected — an admin can connect it in Settings → Email Status');
     }
   }
 
